@@ -21,7 +21,7 @@ PREFIX         = "1PWo3JeB"
 CONTINUE_MAP = {
     "1PWo3JeB9jr": 100,
     "1PWo3JeB9j":   71,
-    "1PWo3JeB9":     2,
+    "1PWo3JeB9":     1,
     "1PWo3JeB":      1,
 }
 DEFAULT_CONTINUE = 1
@@ -187,6 +187,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
