@@ -1,5 +1,5 @@
 import subprocess
-import secrets
+import random
 import multiprocessing
 import sys
 import time
@@ -12,14 +12,13 @@ RANGE_SIZE = 42
 LOWER_BOUND = 0x400000000000000000
 UPPER_BOUND = 0x7fffffffffffffffff
 
-
 def generate_random_start():
     low = LOWER_BOUND >> RANGE_SIZE
     high = UPPER_BOUND >> RANGE_SIZE
     count = high - low + 1
     if count <= 0:
         raise ValueError("Invalid range: high < low")
-    val = secrets.randbelow(count) + low
+    val = random.randint(0, count - 1) + low
     return format(val << RANGE_SIZE, 'X')
 
 
@@ -51,7 +50,7 @@ def run_gpu(gpu_id):
         print(f"✅ GPU {gpu_id} tamamlandı: {random_start}")
         print("----------------------------")
 
-        # İsteğe bağlı: bir süre beklemeden sürekli devam eder
+        # İsteğe bağlı bekleme (performansı düşürmemek için yorum satırında)
         # time.sleep(0.1)
 
 
