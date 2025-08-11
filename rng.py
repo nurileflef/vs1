@@ -9,8 +9,8 @@ FOUND_FILE = "ALL.txt"
 PREFIX = "1PWo3JeB"
 RANGE_SIZE = 42
 
-LOWER_BOUND = 0x449D00000000000000
-UPPER_BOUND = 0x449fffffffffffffff
+LOWER_BOUND = 0x400000000000000000
+UPPER_BOUND = 0x7fffffffffffffffff
 
 def generate_random_start():
     low = LOWER_BOUND >> RANGE_SIZE
