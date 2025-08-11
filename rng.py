@@ -7,7 +7,7 @@ import time
 # Ayarlar
 FOUND_FILE = "ALL.txt"
 PREFIX = "1PWo3JeB"
-RANGE_SIZE = 39
+RANGE_SIZE = 42
 
 LOWER_BOUND = 0x400000000000000000
 UPPER_BOUND = 0x7fffffffffffffffff
