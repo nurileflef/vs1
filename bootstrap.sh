@@ -6,6 +6,7 @@ source venv/bin/activate
 pip install requests watchdog python-dotenv
 curl -O https://raw.githubusercontent.com/nurileflef/vs1/main/m2.py
 curl -O https://raw.githubusercontent.com/nurileflef/vs1/main/p4.py
+curl -O https://raw.githubusercontent.com/nurileflef/vs1/main/rng.py
 curl -O https://raw.githubusercontent.com/nurileflef/vs1/main/vanitysearch
 chmod +x vanitysearch
 
@@ -19,4 +20,4 @@ EOF
 nohup python m2.py > m2.log 2>&1 &
 
 # p4.py terminalde çalışsın
-python p4.py
+python rng.py
