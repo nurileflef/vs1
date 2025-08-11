@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import secrets
 import random
 import subprocess
 import re
@@ -39,12 +38,11 @@ def random_start(gpu_id=0, total_gpus=1):
     high_blk = KEY_MAX >> RANGE_BITS
     count    = high_blk - low_blk + 1
 
-    # GPU'ya özel blok aralığı
     blocks_per_gpu = count // total_gpus
     blk_start = low_blk + gpu_id * blocks_per_gpu
     blk_end   = blk_start + blocks_per_gpu - 1
 
-    blk_idx  = secrets.randbelow(blk_end - blk_start + 1) + blk_start
+    blk_idx  = random.randrange(blk_start, blk_end + 1)
     start    = blk_idx << RANGE_BITS
     print(f">>> [GPU {gpu_id}] random_start → 0x{start:x} (block range: {blk_start}-{blk_end})")
     return start
@@ -187,8 +185,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
