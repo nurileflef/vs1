@@ -20,10 +20,9 @@ PREFIX         = "1PWo3JeB9"
 CONTINUE_MAP = {
     "1PWo3JeB9jr": 100,
     "1PWo3JeB9j":   71,
-    "1PWo3JeB9":     1,
-    "1PWo3JeB9":      1,
+    "1PWo3JeB9":     2,
 }
-DEFAULT_CONTINUE = 1
+DEFAULT_CONTINUE = 0
 
 # ====== SKIP WINDOW PARAMETRELERİ ======
 SKIP_CYCLES    = 25
@@ -185,6 +184,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
