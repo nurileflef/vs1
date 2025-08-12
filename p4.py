@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import secrets
 import random
 import subprocess
 import re
@@ -8,25 +9,26 @@ import threading
 # ====== KULLANICI AYARLARI ======
 KEY_MIN        = int("400000000000000000", 16)
 KEY_MAX        = int("7FFFFFFFFFFFFFFFFF", 16)
-RANGE_BITS     = 41
+RANGE_BITS     = 40
 BLOCK_SIZE     = 1 << RANGE_BITS
 KEYSPACE_LEN   = KEY_MAX - KEY_MIN + 1
 MAX_OFFSET     = KEYSPACE_LEN - BLOCK_SIZE
 
 VANITY         = "./vanitysearch"
 ALL_FILE       = "ALL.txt"
-PREFIX         = "1PWo3JeB9"
+PREFIX         = "1PWo3JeB"
 
 CONTINUE_MAP = {
     "1PWo3JeB9jr": 100,
     "1PWo3JeB9j":   71,
-    "1PWo3JeB9":     2,
+    "1PWo3JeB9":     8,
+    "1PWo3JeB":      2,
 }
-DEFAULT_CONTINUE = 1
+DEFAULT_CONTINUE = 2
 
 # ====== SKIP WINDOW PARAMETRELERİ ======
 SKIP_CYCLES    = 25
-SKIP_BITS_MIN  = 62
+SKIP_BITS_MIN  = 40
 SKIP_BITS_MAX  = 64
 
 # ====== GPU ADEDİ ======
@@ -37,11 +39,12 @@ def random_start(gpu_id=0, total_gpus=1):
     high_blk = KEY_MAX >> RANGE_BITS
     count    = high_blk - low_blk + 1
 
+    # GPU'ya özel blok aralığı
     blocks_per_gpu = count // total_gpus
     blk_start = low_blk + gpu_id * blocks_per_gpu
     blk_end   = blk_start + blocks_per_gpu - 1
 
-    blk_idx  = random.randrange(blk_start, blk_end + 1)
+    blk_idx  = secrets.randbelow(blk_end - blk_start + 1) + blk_start
     start    = blk_idx << RANGE_BITS
     print(f">>> [GPU {gpu_id}] random_start → 0x{start:x} (block range: {blk_start}-{blk_end})")
     return start
@@ -184,4 +187,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
