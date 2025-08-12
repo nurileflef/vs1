@@ -22,7 +22,7 @@ CONTINUE_MAP = {
     "1PWo3JeB9j":   71,
     "1PWo3JeB9":     2,
 }
-DEFAULT_CONTINUE = 0
+DEFAULT_CONTINUE = 1
 
 # ====== SKIP WINDOW PARAMETRELERİ ======
 SKIP_CYCLES    = 25
@@ -184,3 +184,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
