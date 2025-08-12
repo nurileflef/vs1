@@ -28,8 +28,8 @@ CONTINUE_MAP = {
 DEFAULT_CONTINUE = 5  # hit sonrası varsayılan ek skip taraması
 
 # ====== SKIP PARAMETRELERİ ======
-SKIP_BITS_MIN  = 51
-SKIP_BITS_MAX  = 51
+SKIP_BITS_MIN  = 55
+SKIP_BITS_MAX  = 64
 
 # ====== GPU ADEDİ ======
 TOTAL_GPUS = 4
@@ -167,4 +167,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
