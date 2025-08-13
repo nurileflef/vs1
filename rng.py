@@ -29,7 +29,7 @@ MAX_OFFSET   = KEYSPACE_LEN - BLOCK_SIZE
 N_BLOCKS     = KEYSPACE_LEN // BLOCK_SIZE
 
 VANITY         = "./vanitysearch"
-ALL_FILE       = "ALL.txt"
+ALL_FILE       = "ALL1.txt"
 PREFIX         = "1PWo3JeB"
 
 CONTINUE_MAP = {
