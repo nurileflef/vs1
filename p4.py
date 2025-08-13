@@ -16,7 +16,7 @@ MAX_OFFSET     = KEYSPACE_LEN - BLOCK_SIZE
 
 VANITY         = "./vanitysearch"
 ALL_FILE       = "ALL.txt"
-PREFIX         = "1PWo3JeB"
+PREFIX         = "1PWo3JeB9"
 
 # Bulunan prefix'e göre "ek skip tarama sayısı"
 CONTINUE_MAP = {
@@ -167,5 +167,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
