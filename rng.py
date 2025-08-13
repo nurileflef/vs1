@@ -4,6 +4,7 @@ import subprocess
 import re
 import time
 import threading
+import os
 from math import gcd
 
 # ====== KULLANICI AYARLARI ======
@@ -14,6 +15,19 @@ BLOCK_SIZE     = 1 << RANGE_BITS
 KEYSPACE_LEN   = KEY_MAX - KEY_MIN + 1
 MAX_OFFSET     = KEYSPACE_LEN - BLOCK_SIZE
 
+# ====== ENV ile override ======
+kmn = os.getenv("KEY_MIN_HEX")
+kmx = os.getenv("KEY_MAX_HEX")
+if kmn:
+    KEY_MIN = int(kmn, 16)
+if kmx:
+    KEY_MAX = int(kmx, 16)
+KEYSPACE_LEN = KEY_MAX - KEY_MIN + 1
+MAX_OFFSET   = KEYSPACE_LEN - BLOCK_SIZE
+
+# Hesaplanan blok sayısı
+N_BLOCKS     = KEYSPACE_LEN // BLOCK_SIZE
+
 VANITY         = "./vanitysearch"
 ALL_FILE       = "ALL.txt"
 PREFIX         = "1PWo3JeB"
@@ -21,25 +35,18 @@ PREFIX         = "1PWo3JeB"
 CONTINUE_MAP = {
     "1PWo3JeB9jr": 100,
     "1PWo3JeB9j":   71,
-    "1PWo3JeB9":     15,
-    "1PWo3JeB":      5,
+    "1PWo3JeB9":     20,
+    "1PWo3JeB":      10,
 }
-DEFAULT_CONTINUE = 5
+DEFAULT_CONTINUE = 10
 
 # ====== GPU LİSTESİ ======
 GPU_IDS = [0, 1, 2, 3]  # 4 GPU
 
 # ====== SKIP PENCERESİ ======
 SKIP_CYCLES      = 25
-
-# Eski güç-iki bit sıçrama yerine blok adımı aralığı (güç-iki olmayan dağılım)
-# Bu değerler: her "skip" adımında kaç blok ileri gidileceğinin min/max aralığı.
-# Büyük aralık + CSPRNG ile üst bit tekrarlarını "görsel" olarak kırar.
 SKIP_STEPS_MIN   = 1 << 8      # 256 blok
 SKIP_STEPS_MAX   = 1 << 20     # ~1M blok
-
-# ====== HESAPLANAN DEĞERLER ======
-N_BLOCKS = KEYSPACE_LEN // BLOCK_SIZE  # tüm blok sayısı
 
 def wrap_inc(start: int, inc: int) -> int:
     off = (start - KEY_MIN + inc) % (MAX_OFFSET + 1)
@@ -77,17 +84,11 @@ def scan_at(start: int, gpu_id: int):
     return hit, addr, priv
 
 def make_block_sequencer(gpu_id: int, ngpus: int):
-    """
-    Her GPU için çakışmasız blok-permütasyon sıralayıcı.
-    i = (step * ngpus + gpu_id) mod N üzerinde,
-    idx = (a*i + b) mod N ile permütasyon.
-    """
-    # a ile N_BLOCKS aralarında asal olmalı (permutasyon için)
     a = secrets.randbelow(N_BLOCKS) | 1
     while gcd(a, N_BLOCKS) != 1:
         a = secrets.randbelow(N_BLOCKS) | 1
     b = secrets.randbelow(N_BLOCKS)
-    step = -1  # ilk çağrıda 0'a gelsin
+    step = -1
 
     def next_start(delta_steps: int = 1) -> int:
         nonlocal step
@@ -103,7 +104,7 @@ def make_block_sequencer(gpu_id: int, ngpus: int):
 def worker(gpu_id: int, ngpus: int):
     sorted_pfx      = sorted(CONTINUE_MAP.keys(), key=lambda p: -len(p))
     next_seq_start  = make_block_sequencer(gpu_id, ngpus)
-    start           = next_seq_start()  # hizalı, çakışmasız ilk blok
+    start           = next_seq_start()
     scan_ct         = 0
 
     initial_window  = 0
@@ -115,22 +116,18 @@ def worker(gpu_id: int, ngpus: int):
 
     try:
         while True:
-            # MAIN WINDOW
             if window_rem > 0:
                 last_main_start = start
                 hit, addr, priv = scan_at(start, gpu_id)
                 scan_ct += 1
-
                 if hit and priv:
                     matched = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
                     new_win = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
                     if new_win > initial_window:
                         initial_window = new_win
                         print(f"[GPU {gpu_id}]   >> nadir hit! window={initial_window}")
-
                 window_rem -= 1
                 print(f"[GPU {gpu_id}]   >> [MAIN WINDOW] {initial_window-window_rem}/{initial_window}")
-
                 if window_rem > 0:
                     start = wrap_inc(start, BLOCK_SIZE)
                 else:
@@ -138,39 +135,32 @@ def worker(gpu_id: int, ngpus: int):
                     print(f"[GPU {gpu_id}]   >> MAIN WINDOW bitti → skip-window={SKIP_CYCLES}\n")
                 continue
 
-            # SKIP WINDOW (güç-iki sıçrama yerine: blok adım sayısı CSPRNG)
             if skip_rem > 0:
                 span = SKIP_STEPS_MAX - SKIP_STEPS_MIN + 1
                 skip_steps = SKIP_STEPS_MIN + (secrets.randbelow(span))
                 skip_start = next_seq_start(skip_steps)
                 start = skip_start
                 last_main_start = skip_start
-
                 print(f"[GPU {gpu_id}]   >> [SKIP WINDOW] "
                       f"{SKIP_CYCLES - skip_rem + 1}/{SKIP_CYCLES}: "
                       f"{skip_steps} blok skip → 0x{start:x}")
-
                 hit, addr, priv = scan_at(start, gpu_id)
                 scan_ct += 1
-
                 if hit and priv:
                     matched = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
                     new_win = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
                     if new_win > initial_window:
                         initial_window = new_win
                     window_rem = initial_window
-                    # bir sonraki blok
                     start = wrap_inc(start, BLOCK_SIZE)
                     print(f"[GPU {gpu_id}]   >> SKIP-HIT! matched={matched}, window={initial_window}\n")
                 else:
                     skip_rem -= 1
                     if skip_rem == 0:
-                        # Çakışmasız sıradan bir sonraki blokla devam
                         start = next_seq_start()
                         print(f"[GPU {gpu_id}]   >> SKIP WINDOW no-hit → next_seq\n")
                 continue
 
-            # NORMAL tarama (SEQ)
             for _ in range(DEFAULT_CONTINUE):
                 hit, addr, priv = scan_at(start, gpu_id)
                 scan_ct += 1
@@ -184,7 +174,6 @@ def worker(gpu_id: int, ngpus: int):
                 else:
                     start = wrap_inc(start, BLOCK_SIZE)
             else:
-                # Eski random_start yerine çakışmasız bir sonraki blok
                 start = next_seq_start()
 
             if scan_ct % 10 == 0:
@@ -196,12 +185,10 @@ def worker(gpu_id: int, ngpus: int):
 def main():
     threads = []
     ngpus = len(GPU_IDS)
-
     for gpu_id in GPU_IDS:
         t = threading.Thread(target=worker, args=(gpu_id, ngpus), daemon=True)
         threads.append(t)
         t.start()
-
     try:
         while True:
             time.sleep(1)
