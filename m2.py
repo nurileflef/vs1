@@ -13,7 +13,7 @@ load_dotenv()
 BOT_TOKEN   = os.getenv("TELEGRAM_TOKEN")
 CHAT_ID     = os.getenv("TELEGRAM_CHAT_ID")
 SEND_URL    = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-OUTPUT_FILE = "ALL.txt"
+OUTPUT_FILE = "ALL1.txt"
 
 class FileChangeHandler(FileSystemEventHandler):
     def __init__(self):
