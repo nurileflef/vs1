@@ -1,13 +1,14 @@
 #!/usr/bin/env python3
-import random
+import secrets
 import subprocess
 import re
 import time
 import threading
+from math import gcd
 
 # ====== KULLANICI AYARLARI ======
-KEY_MIN        = int("600000000000000000", 16)
-KEY_MAX        = int("6FFFFFFFFFFFFFFFFF", 16)
+KEY_MIN        = int("400000000000000000", 16)
+KEY_MAX        = int("7FFFFFFFFFFFFFFFFF", 16)
 RANGE_BITS     = 36
 BLOCK_SIZE     = 1 << RANGE_BITS
 KEYSPACE_LEN   = KEY_MAX - KEY_MIN + 1
@@ -20,25 +21,25 @@ PREFIX         = "1PWo3JeB"
 CONTINUE_MAP = {
     "1PWo3JeB9jr": 100,
     "1PWo3JeB9j":   71,
-    "1PWo3JeB9":     10,
+    "1PWo3JeB9":     15,
     "1PWo3JeB":      5,
 }
 DEFAULT_CONTINUE = 5
 
-# ====== SKIP WINDOW PARAMETRELERİ ======
-SKIP_CYCLES    = 25
-SKIP_BITS_MIN  = 50
-SKIP_BITS_MAX  = 62
+# ====== GPU LİSTESİ ======
+GPU_IDS = [0, 1, 2, 3]  # 4 GPU
 
-def random_start():
-    # 64-bit rastgele sayı al, sonra key aralığına modulo ile sıkıştır,
-    # sonrasında BLOCK_SIZE hizasına yuvarla
-    candidate = random.getrandbits(64)
-    offset = candidate % (MAX_OFFSET + 1)
-    start = KEY_MIN + offset
-    start = start & (~(BLOCK_SIZE - 1))  # Alttaki RANGE_BITS kadar biti sıfırla (blok hizası)
-    print(f">>> random_start → start=0x{start:x}")
-    return start
+# ====== SKIP PENCERESİ ======
+SKIP_CYCLES      = 25
+
+# Eski güç-iki bit sıçrama yerine blok adımı aralığı (güç-iki olmayan dağılım)
+# Bu değerler: her "skip" adımında kaç blok ileri gidileceğinin min/max aralığı.
+# Büyük aralık + CSPRNG ile üst bit tekrarlarını "görsel" olarak kırar.
+SKIP_STEPS_MIN   = 1 << 8      # 256 blok
+SKIP_STEPS_MAX   = 1 << 20     # ~1M blok
+
+# ====== HESAPLANAN DEĞERLER ======
+N_BLOCKS = KEYSPACE_LEN // BLOCK_SIZE  # tüm blok sayısı
 
 def wrap_inc(start: int, inc: int) -> int:
     off = (start - KEY_MIN + inc) % (MAX_OFFSET + 1)
@@ -75,20 +76,46 @@ def scan_at(start: int, gpu_id: int):
     p.wait()
     return hit, addr, priv
 
-def worker(gpu_id: int):
+def make_block_sequencer(gpu_id: int, ngpus: int):
+    """
+    Her GPU için çakışmasız blok-permütasyon sıralayıcı.
+    i = (step * ngpus + gpu_id) mod N üzerinde,
+    idx = (a*i + b) mod N ile permütasyon.
+    """
+    # a ile N_BLOCKS aralarında asal olmalı (permutasyon için)
+    a = secrets.randbelow(N_BLOCKS) | 1
+    while gcd(a, N_BLOCKS) != 1:
+        a = secrets.randbelow(N_BLOCKS) | 1
+    b = secrets.randbelow(N_BLOCKS)
+    step = -1  # ilk çağrıda 0'a gelsin
+
+    def next_start(delta_steps: int = 1) -> int:
+        nonlocal step
+        step = (step + delta_steps) % N_BLOCKS
+        i = (step * ngpus + gpu_id) % N_BLOCKS
+        idx = (a * i + b) % N_BLOCKS
+        start = KEY_MIN + (idx * BLOCK_SIZE)
+        print(f">>> [GPU {gpu_id}] next_seq: idx={idx} start=0x{start:x}")
+        return start
+
+    return next_start
+
+def worker(gpu_id: int, ngpus: int):
     sorted_pfx      = sorted(CONTINUE_MAP.keys(), key=lambda p: -len(p))
-    start           = random_start()
+    next_seq_start  = make_block_sequencer(gpu_id, ngpus)
+    start           = next_seq_start()  # hizalı, çakışmasız ilk blok
     scan_ct         = 0
 
     initial_window  = 0
     window_rem      = 0
     skip_rem        = 0
-    last_main_start = 0
+    last_main_start = start
 
     print(f"\n→ GPU {gpu_id} başlatıldı. CTRL-C ile durdurabilirsiniz.\n")
 
     try:
         while True:
+            # MAIN WINDOW
             if window_rem > 0:
                 last_main_start = start
                 hit, addr, priv = scan_at(start, gpu_id)
@@ -111,16 +138,17 @@ def worker(gpu_id: int):
                     print(f"[GPU {gpu_id}]   >> MAIN WINDOW bitti → skip-window={SKIP_CYCLES}\n")
                 continue
 
+            # SKIP WINDOW (güç-iki sıçrama yerine: blok adım sayısı CSPRNG)
             if skip_rem > 0:
-                bit_skip    = random.randrange(SKIP_BITS_MIN, SKIP_BITS_MAX+1)
-                skip_amt    = 1 << bit_skip
-                skip_start  = wrap_inc(last_main_start, skip_amt)
-                start       = skip_start
+                span = SKIP_STEPS_MAX - SKIP_STEPS_MIN + 1
+                skip_steps = SKIP_STEPS_MIN + (secrets.randbelow(span))
+                skip_start = next_seq_start(skip_steps)
+                start = skip_start
                 last_main_start = skip_start
 
                 print(f"[GPU {gpu_id}]   >> [SKIP WINDOW] "
-                      f"{SKIP_CYCLES-skip_rem+1}/{SKIP_CYCLES}: "
-                      f"{bit_skip}-bit skip → 0x{start:x}")
+                      f"{SKIP_CYCLES - skip_rem + 1}/{SKIP_CYCLES}: "
+                      f"{skip_steps} blok skip → 0x{start:x}")
 
                 hit, addr, priv = scan_at(start, gpu_id)
                 scan_ct += 1
@@ -128,20 +156,21 @@ def worker(gpu_id: int):
                 if hit and priv:
                     matched = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
                     new_win = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
-
                     if new_win > initial_window:
                         initial_window = new_win
                     window_rem = initial_window
-                    skip_rem   = SKIP_CYCLES
-                    start      = wrap_inc(start, BLOCK_SIZE)
+                    # bir sonraki blok
+                    start = wrap_inc(start, BLOCK_SIZE)
                     print(f"[GPU {gpu_id}]   >> SKIP-HIT! matched={matched}, window={initial_window}\n")
                 else:
                     skip_rem -= 1
                     if skip_rem == 0:
-                        start = random_start()
-                        print(f"[GPU {gpu_id}]   >> SKIP WINDOW no-hit→ random_start\n")
+                        # Çakışmasız sıradan bir sonraki blokla devam
+                        start = next_seq_start()
+                        print(f"[GPU {gpu_id}]   >> SKIP WINDOW no-hit → next_seq\n")
                 continue
 
+            # NORMAL tarama (SEQ)
             for _ in range(DEFAULT_CONTINUE):
                 hit, addr, priv = scan_at(start, gpu_id)
                 scan_ct += 1
@@ -155,7 +184,8 @@ def worker(gpu_id: int):
                 else:
                     start = wrap_inc(start, BLOCK_SIZE)
             else:
-                start = random_start()
+                # Eski random_start yerine çakışmasız bir sonraki blok
+                start = next_seq_start()
 
             if scan_ct % 10 == 0:
                 print(f"[GPU {gpu_id}] [STATUS] scans={scan_ct}, next=0x{start:x}")
@@ -165,8 +195,10 @@ def worker(gpu_id: int):
 
 def main():
     threads = []
-    for gpu_id in range(4):  # 4 GPU için 0,1,2,3 idleri
-        t = threading.Thread(target=worker, args=(gpu_id,), daemon=True)
+    ngpus = len(GPU_IDS)
+
+    for gpu_id in GPU_IDS:
+        t = threading.Thread(target=worker, args=(gpu_id, ngpus), daemon=True)
         threads.append(t)
         t.start()
 
