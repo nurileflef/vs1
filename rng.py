@@ -8,7 +8,7 @@ import threading
 # ====== KULLANICI AYARLARI ======
 KEY_MIN        = int("400000000000000000", 16)
 KEY_MAX        = int("7FFFFFFFFFFFFFFFFF", 16)
-RANGE_BITS     = 40
+RANGE_BITS     = 36
 BLOCK_SIZE     = 1 << RANGE_BITS
 KEYSPACE_LEN   = KEY_MAX - KEY_MIN + 1
 MAX_OFFSET     = KEYSPACE_LEN - BLOCK_SIZE
@@ -20,15 +20,15 @@ PREFIX         = "1PWo3JeB"
 CONTINUE_MAP = {
     "1PWo3JeB9jr": 100,
     "1PWo3JeB9j":   71,
-    "1PWo3JeB9":     3,
-    "1PWo3JeB":      1,
+    "1PWo3JeB9":     10,
+    "1PWo3JeB":      5,
 }
-DEFAULT_CONTINUE = 1
+DEFAULT_CONTINUE = 5
 
 # ====== SKIP WINDOW PARAMETRELERİ ======
 SKIP_CYCLES    = 25
-SKIP_BITS_MIN  = 40
-SKIP_BITS_MAX  = 64
+SKIP_BITS_MIN  = 50
+SKIP_BITS_MAX  = 62
 
 def random_start():
     # 64-bit rastgele sayı al, sonra key aralığına modulo ile sıkıştır,
