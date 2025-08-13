@@ -39,8 +39,8 @@ def block_index_from_start(start: int) -> int:
 
 def random_start(gpu_id=0, total_gpus=1):
     """
-    GPU sınıfına uygun blok seçer. Alt bitler sıfırlı kalır (blok hizalı),
-    ama üst bitler daha dağınık olur. Böylece start adresi hep aynı gibi görünmez.
+    GPU sınıfına uygun random blok index seçer.
+    Alt bitler sıfır kalır (blok hizalı), üst bitler dağınık olur.
     """
     low_blk  = KEY_MIN >> RANGE_BITS
     high_blk = KEY_MAX >> RANGE_BITS
