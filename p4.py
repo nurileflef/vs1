@@ -12,29 +12,26 @@ KEY_MAX        = int("7FFFFFFFFFFFFFFFFF", 16)
 RANGE_BITS     = 39
 BLOCK_SIZE     = 1 << RANGE_BITS
 KEYSPACE_LEN   = KEY_MAX - KEY_MIN + 1
-MAX_OFFSET     = KEYSPACE_LEN - BLOCK_SIZE  # start en fazla KEY_MAX - 2^RANGE_BITS + 1 olabilir
+MAX_OFFSET     = KEYSPACE_LEN - BLOCK_SIZE
 
 VANITY         = "./vanitysearch"
-ALL_FILE       = "ALL.txt"          # istersen GPU'ya göre: f"ALL_gpu{gpu_id}.txt"
+ALL_FILE       = "ALL.txt"
 PREFIX         = "1PWo3JeB9"
 
-# Bulunan prefix'e göre "ek skip tarama sayısı"
 CONTINUE_MAP = {
     "1PWo3JeB9jr": 100,
     "1PWo3JeB9j":   71,
     "1PWo3JeB9":     15,
     "1PWo3JeB":      5,
 }
-DEFAULT_CONTINUE = 5  # hit sonrası varsayılan ek skip taraması
+DEFAULT_CONTINUE = 5
 
-# ====== SKIP PARAMETRELERİ ======
 SKIP_BITS_MIN  = 55
 SKIP_BITS_MAX  = 64
 
-# ====== GPU / RESEED ======
 TOTAL_GPUS     = 4
-RESEED_EVERY   = 15      # taban reseed periyodu (scan sayısı)
-RESEED_JITTER  = 5       # ± jitter (örn. 15±5 → 10..20)
+RESEED_EVERY   = 15
+RESEED_JITTER  = 5
 
 # ====== YARDIMCI ======
 def block_index_from_start(start: int) -> int:
@@ -42,15 +39,18 @@ def block_index_from_start(start: int) -> int:
 
 def random_start(gpu_id=0, total_gpus=1):
     """
-    Start adresini KEY_MIN..KEY_MIN+MAX_OFFSET aralığından uniform seçer.
-    GPU'lar çakışmasın diye block_index % total_gpus == gpu_id sınıfını korur.
-    Bu seçim blok hizasında DEĞİL; alt bitler de rastgeleleşir.
+    GPU sınıfına uygun blok seçer. Alt bitler sıfırlı kalır (blok hizalı),
+    ama üst bitler daha dağınık olur. Böylece start adresi hep aynı gibi görünmez.
     """
+    low_blk  = KEY_MIN >> RANGE_BITS
+    high_blk = KEY_MAX >> RANGE_BITS
+    bit_len  = (high_blk - low_blk + 1).bit_length()
+
     while True:
-        off = secrets.randbelow(MAX_OFFSET + 1)  # 0..MAX_OFFSET (geçerli tüm start'lar)
-        if ((off >> RANGE_BITS) % total_gpus) == gpu_id:
-            start = KEY_MIN + off
-            print(f">>> [GPU {gpu_id}] random_start → 0x{start:x} (class={block_index_from_start(start) % total_gpus})")
+        blk_idx = secrets.randbits(bit_len)
+        if low_blk <= blk_idx <= high_blk and (blk_idx % total_gpus) == gpu_id:
+            start = blk_idx << RANGE_BITS
+            print(f">>> [GPU {gpu_id}] random_start → 0x{start:x} (block={blk_idx})")
             return start
 
 def wrap_inc(start: int, inc: int) -> int:
@@ -89,10 +89,9 @@ def scan_at(start: int, gpu_id: int):
     return hit, addr, priv
 
 def reseed_threshold() -> int:
-    """RESEED_EVERY ± RESEED_JITTER aralığında pozitif eşik döndürür."""
     if RESEED_JITTER <= 0:
         return max(1, RESEED_EVERY)
-    delta = secrets.randbelow(2 * RESEED_JITTER + 1) - RESEED_JITTER  # [-J, +J]
+    delta = secrets.randbelow(2 * RESEED_JITTER + 1) - RESEED_JITTER
     return max(1, RESEED_EVERY + delta)
 
 def worker(gpu_id: int):
@@ -103,16 +102,14 @@ def worker(gpu_id: int):
     extra_skips         = 0
     miss_ct             = 0
 
-    # Per-GPU reseed sayaçları
     scans_since_reseed  = 0
     reseed_target       = reseed_threshold()
-    reseed_pending      = False  # extra-skip sırasında dolarsa, bitince uygulanacak
+    reseed_pending      = False
 
     print(f"\n→ GPU {gpu_id} skip-modunda başlatıldı. CTRL-C ile durdurabilirsiniz.\n")
 
     try:
         while True:
-            # Hit sonrası planlı ek skip taraması
             if extra_skips > 0:
                 bit_skip = random.randrange(SKIP_BITS_MIN, SKIP_BITS_MAX + 1)
                 start    = wrap_inc(start, 1 << bit_skip)
@@ -133,11 +130,9 @@ def worker(gpu_id: int):
                     extra_skips -= 1
                     miss_ct     += 1
 
-                # Eşik dolduysa, extra-skip bitince reseed yap
                 if scans_since_reseed >= reseed_target:
                     reseed_pending = True
 
-                # Extra-skip bitti ve reseed bekliyorsa şimdi uygula
                 if extra_skips == 0 and reseed_pending:
                     old = start
                     start = random_start(gpu_id=gpu_id, total_gpus=TOTAL_GPUS)
@@ -150,7 +145,6 @@ def worker(gpu_id: int):
                     print(f"[GPU {gpu_id}] [STATUS] scans={scan_ct}, next=0x{start:x}")
                 continue
 
-            # Normal sürekli skip taraması
             bit_skip = random.randrange(SKIP_BITS_MIN, SKIP_BITS_MAX + 1)
             start    = wrap_inc(start, 1 << bit_skip)
             print(f"[GPU {gpu_id}]   >> [SKIP] {bit_skip}-bit skip → 0x{start:x}")
@@ -167,7 +161,6 @@ def worker(gpu_id: int):
             else:
                 miss_ct += 1
 
-            # Normal modda eşik dolduysa hemen reseed
             if scans_since_reseed >= reseed_target and extra_skips == 0:
                 old = start
                 start = random_start(gpu_id=gpu_id, total_gpus=TOTAL_GPUS)
@@ -197,8 +190,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
-
