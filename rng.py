@@ -36,9 +36,9 @@ CONTINUE_MAP = {
     "1PWo3JeB9jr": 100,
     "1PWo3JeB9j":   71,
     "1PWo3JeB9":     20,
-    "1PWo3JeB":      10,
+    "1PWo3JeB":      4,
 }
-DEFAULT_CONTINUE = 10
+DEFAULT_CONTINUE = 4
 
 # ====== GPU LİSTESİ ======
 GPU_IDS = [0, 1, 2, 3]  # 4 GPU
