@@ -15,8 +15,8 @@ KEYSPACE_LEN   = KEY_MAX - KEY_MIN + 1
 MAX_OFFSET     = KEYSPACE_LEN - BLOCK_SIZE
 
 VANITY         = "./vanitysearch"
-ALL_FILE       = "ALL.txt"
-PREFIX         = "1PWo3JeB9"
+ALL_FILE       = "ALL1.txt"
+PREFIX         = "1PWo3JeB"
 
 CONTINUE_MAP = {
     "1PWo3JeB9jr": 100,
@@ -190,6 +190,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
