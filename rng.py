@@ -24,10 +24,9 @@ if kmx:
     KEY_MAX = int(kmx, 16)
 KEYSPACE_LEN = KEY_MAX - KEY_MIN + 1
 MAX_OFFSET   = KEYSPACE_LEN - BLOCK_SIZE
-
-# Hesaplanan blok sayısı
 N_BLOCKS     = KEYSPACE_LEN // BLOCK_SIZE
 
+# ====== Arama Ayarları ======
 VANITY         = "./vanitysearch"
 ALL_FILE       = "ALL1.txt"
 PREFIX         = "1PWo3JeB9"
@@ -35,18 +34,17 @@ PREFIX         = "1PWo3JeB9"
 CONTINUE_MAP = {
     "1PWo3JeB9jr": 100,
     "1PWo3JeB9j":   20,
-    "1PWo3JeB9":     4,
-    "1PWo3JeB":      4,
+    "1PWo3JeB9":     2,
 }
-DEFAULT_CONTINUE = 4
+DEFAULT_CONTINUE = 2
 
 # ====== GPU LİSTESİ ======
-GPU_IDS = [0, 1, 2, 3]  # 4 GPU
+GPU_IDS = [0, 1, 2, 3]
 
 # ====== SKIP PENCERESİ ======
 SKIP_CYCLES      = 25
-SKIP_STEPS_MIN   = 1 << 8      # 256 blok
-SKIP_STEPS_MAX   = 1 << 20     # ~1M blok
+SKIP_STEPS_MIN   = 1 << 8
+SKIP_STEPS_MAX   = 1 << 20
 
 def wrap_inc(start: int, inc: int) -> int:
     off = (start - KEY_MIN + inc) % (MAX_OFFSET + 1)
@@ -121,11 +119,12 @@ def worker(gpu_id: int, ngpus: int):
                 hit, addr, priv = scan_at(start, gpu_id)
                 scan_ct += 1
                 if hit and priv:
-                    matched = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
-                    new_win = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
-                    if new_win > initial_window:
-                        initial_window = new_win
-                        print(f"[GPU {gpu_id}]   >> nadir hit! window={initial_window}")
+                    matched = next((p for p in sorted_pfx if addr.startswith(p)), None)
+                    if matched:
+                        new_win = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
+                        if new_win > initial_window:
+                            initial_window = new_win
+                            print(f"[GPU {gpu_id}]   >> nadir hit! window={initial_window}")
                 window_rem -= 1
                 print(f"[GPU {gpu_id}]   >> [MAIN WINDOW] {initial_window-window_rem}/{initial_window}")
                 if window_rem > 0:
@@ -137,7 +136,7 @@ def worker(gpu_id: int, ngpus: int):
 
             if skip_rem > 0:
                 span = SKIP_STEPS_MAX - SKIP_STEPS_MIN + 1
-                skip_steps = SKIP_STEPS_MIN + (secrets.randbelow(span))
+                skip_steps = SKIP_STEPS_MIN + secrets.randbelow(span)
                 skip_start = next_seq_start(skip_steps)
                 start = skip_start
                 last_main_start = skip_start
@@ -147,13 +146,12 @@ def worker(gpu_id: int, ngpus: int):
                 hit, addr, priv = scan_at(start, gpu_id)
                 scan_ct += 1
                 if hit and priv:
-                    matched = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
-                    new_win = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
-                    if new_win > initial_window:
-                        initial_window = new_win
-                    window_rem = initial_window
-                    start = wrap_inc(start, BLOCK_SIZE)
-                    print(f"[GPU {gpu_id}]   >> SKIP-HIT! matched={matched}, window={initial_window}\n")
+                    matched = next((p for p in sorted_pfx if addr.startswith(p)), None)
+                    if matched:
+                        initial_window = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
+                        window_rem = initial_window
+                        start = wrap_inc(start, BLOCK_SIZE)
+                        print(f"[GPU {gpu_id}]   >> SKIP-HIT! matched={matched}, window={initial_window}\n")
                 else:
                     skip_rem -= 1
                     if skip_rem == 0:
@@ -165,12 +163,13 @@ def worker(gpu_id: int, ngpus: int):
                 hit, addr, priv = scan_at(start, gpu_id)
                 scan_ct += 1
                 if hit and priv:
-                    matched        = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
-                    initial_window = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
-                    window_rem     = initial_window
-                    start          = wrap_inc(start, BLOCK_SIZE)
-                    print(f"[GPU {gpu_id}]   >> SEQ-HIT! matched={matched}, window={initial_window}\n")
-                    break
+                    matched = next((p for p in sorted_pfx if addr.startswith(p)), None)
+                    if matched:
+                        initial_window = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
+                        window_rem     = initial_window
+                        start          = wrap_inc(start, BLOCK_SIZE)
+                        print(f"[GPU {gpu_id}]   >> SEQ-HIT! matched={matched}, window={initial_window}\n")
+                        break
                 else:
                     start = wrap_inc(start, BLOCK_SIZE)
             else:
