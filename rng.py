@@ -30,12 +30,12 @@ N_BLOCKS     = KEYSPACE_LEN // BLOCK_SIZE
 
 VANITY         = "./vanitysearch"
 ALL_FILE       = "ALL1.txt"
-PREFIX         = "1PWo3JeB"
+PREFIX         = "1PWo3JeB9"
 
 CONTINUE_MAP = {
     "1PWo3JeB9jr": 100,
-    "1PWo3JeB9j":   71,
-    "1PWo3JeB9":     20,
+    "1PWo3JeB9j":   20,
+    "1PWo3JeB9":     4,
     "1PWo3JeB":      4,
 }
 DEFAULT_CONTINUE = 4
