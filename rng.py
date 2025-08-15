@@ -4,7 +4,20 @@ import random
 import subprocess
 import re
 import time
+import sys
+import errno
 from multiprocessing import Process
+
+# ======== GÜVENLİ PRINT WRAPPER ========
+# Tüm print'leri BlockingIOError'dan korur
+original_print = print
+def print(*args, **kwargs):
+    try:
+        original_print(*args, **kwargs)
+    except IOError as e:
+        # EAGAIN yalnızca "yazma bloklandı" hatası
+        if getattr(e, "errno", None) != errno.EAGAIN:
+            raise
 
 # ====== KULLANICI AYARLARI ======
 KEY_MIN        = int("400000000000000000", 16)
@@ -19,16 +32,16 @@ ALL_FILE       = "ALL1.txt"
 PREFIX         = "1PWo3JeB9"  # güncellendi
 
 CONTINUE_MAP = {
-    "1PWo3JeB9jr": 100,
-    "1PWo3JeB9j":   10,
-    "1PWo3JeB9":    4,  # en sık çıkan olarak güncellendi
+    "1PWo3JeB9jr": 50,
+    "1PWo3JeB9j":   5,
+    "1PWo3JeB9":    3,  # en sık çıkan olarak güncellendi
     "1PWo3JeB":      1,
 }
 DEFAULT_CONTINUE = 1
 
 # ====== SKIP WINDOW PARAMETRELERİ ======
 SKIP_CYCLES    = 25
-SKIP_BITS_MIN  = 40
+SKIP_BITS_MIN  = 55
 SKIP_BITS_MAX  = 64
 
 def random_start():
@@ -63,9 +76,11 @@ def scan_at(start: int, gpu_id: int):
             if line.startswith("GPU:"):
                 header_done = True
             continue
+
         if line.startswith("Public Addr:"):
             hit, addr = True, line.split()[-1].strip()
             print(f"   !! public-hit: {addr}")
+
         if "Priv (HEX):" in line and hit:
             m = re.search(r"0x\s*([0-9A-Fa-f]+)", line)
             if m:
@@ -89,6 +104,7 @@ def worker(gpu_id: int):
 
     try:
         while True:
+            # ====== MAIN WINDOW ======
             if window_rem > 0:
                 last_main_start = start
                 hit, addr, priv = scan_at(start, gpu_id)
@@ -102,7 +118,8 @@ def worker(gpu_id: int):
                         print(f"   >> [GPU {gpu_id}] nadir hit! window={initial_window}")
 
                 window_rem -= 1
-                print(f"   >> [GPU {gpu_id}] [MAIN WINDOW] {initial_window-window_rem}/{initial_window}")
+                print(f"   >> [GPU {gpu_id}] [MAIN WINDOW] "
+                      f"{initial_window-window_rem}/{initial_window}")
 
                 if window_rem > 0:
                     start = wrap_inc(start, BLOCK_SIZE)
@@ -111,6 +128,7 @@ def worker(gpu_id: int):
                     print(f"   >> [GPU {gpu_id}] MAIN WINDOW bitti → skip-window={SKIP_CYCLES}\n")
                 continue
 
+            # ====== SKIP WINDOW ======
             if skip_rem > 0:
                 bit_skip    = random.randrange(SKIP_BITS_MIN, SKIP_BITS_MAX+1)
                 skip_amt    = 1 << bit_skip
@@ -142,6 +160,7 @@ def worker(gpu_id: int):
                         print(f"   >> [GPU {gpu_id}] SKIP WINDOW no-hit→ random_start\n")
                 continue
 
+            # ====== DEFAULT CONTINUE ======
             for _ in range(DEFAULT_CONTINUE):
                 hit, addr, priv = scan_at(start, gpu_id)
                 scan_ct += 1
