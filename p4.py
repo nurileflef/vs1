@@ -2,62 +2,38 @@
 import os
 import sys
 import time
+import threading
 import secrets
 import subprocess
-import threading
 import pty
-from math import gcd
 
-# ====== KULLANICI AYARLARI ======
-KEY_MIN      = int("400000000000000000", 16)
-KEY_MAX      = int("7FFFFFFFFFFFFFFFFF", 16)
-RANGE_BITS   = 39
-BLOCK_SIZE   = 1 << RANGE_BITS
-KEYSPACE_LEN = KEY_MAX - KEY_MIN + 1
-MAX_OFFSET   = KEYSPACE_LEN - BLOCK_SIZE
-N_BLOCKS     = KEYSPACE_LEN // BLOCK_SIZE
+# ====== AYARLAR ======
+KEY_MIN    = int("400000000000000000", 16)
+KEY_MAX    = int("7FFFFFFFFFFFFFFFFF", 16)
+RANGE_BITS = 39
+BLOCK_SIZE = 1 << RANGE_BITS
+KEYSPACE   = KEY_MAX - KEY_MIN + 1
+MAX_OFFSET = KEYSPACE - BLOCK_SIZE
 
-VANITY     = "./vanitysearch"
-ALL_FILE   = "ALL1.txt"
-PREFIX     = "1PWo3JeB9"
+VANITY   = "./vanitysearch"
+ALL_FILE = "ALL1.txt"
+PREFIX   = "1PWo3JeB9"
 
-GPU_IDS    = [0, 1, 2, 3]
+GPU_IDS  = [0, 1, 2, 3]
 
 
-def wrap_inc(start: int, inc: int = BLOCK_SIZE) -> int:
-    """KEY_MIN…KEY_MAX arasında wrap-around ile inc artışı."""
-    off = (start - KEY_MIN + inc) % (MAX_OFFSET + 1)
+def wrap_inc(start: int) -> int:
+    """Bir sonraki blok başlangıcına, wrap-around ile geçiş."""
+    off   = (start - KEY_MIN + BLOCK_SIZE) % (MAX_OFFSET + 1)
     return KEY_MIN + off
-
-
-def make_block_sequencer(gpu_id: int, ngpus: int):
-    """Çakışmasız, permütasyon bazlı blok sıralayıcı."""
-    a = secrets.randbelow(N_BLOCKS) | 1
-    while gcd(a, N_BLOCKS) != 1:
-        a = secrets.randbelow(N_BLOCKS) | 1
-    b = secrets.randbelow(N_BLOCKS)
-    step = -1
-
-    def next_start(delta_steps: int = 1) -> int:
-        nonlocal step
-        step = (step + delta_steps) % N_BLOCKS
-        i = (step * ngpus + gpu_id) % N_BLOCKS
-        idx = (a * i + b) % N_BLOCKS
-        start = KEY_MIN + idx * BLOCK_SIZE
-        print(f">>> [GPU {gpu_id}] next_seq: idx={idx} start=0x{start:x}", flush=True)
-        return start
-
-    return next_start
 
 
 def scan_at(start: int, gpu_id: int):
     """
-    scan_start mesajı ve VanitySearch'ü gerçek TTY modunda çağır.
-    -o ALL1.txt bayrağı ile sonuçları ALL1.txt'ye yazar.
-    Public Addr satırlarını da yakalar.
+    PTY üzerinden VanitySearch'ü çalıştırır, gerçek terminal çıktısını ekrana basar
+    ve 'Public Addr:' satırını yakalar.
     """
     print(f">>> [GPU {gpu_id}] scan start=0x{start:x}", flush=True)
-
     cmd = [
         VANITY,
         "-gpuId", str(gpu_id),
@@ -67,22 +43,21 @@ def scan_at(start: int, gpu_id: int):
         PREFIX
     ]
 
-    # PTY master/slave aç
     master_fd, slave_fd = pty.openpty()
-    proc = subprocess.Popen(
+    p = subprocess.Popen(
         cmd,
-        stdin=subprocess.DEVNULL,
-        stdout=slave_fd,
-        stderr=slave_fd,
-        close_fds=True
+        stdin = subprocess.DEVNULL,
+        stdout = slave_fd,
+        stderr = slave_fd,
+        close_fds = True
     )
     os.close(slave_fd)
 
-    hit = False
-    addr = None
+    hit    = False
+    addr   = None
     buffer = b""
 
-    # PTY üzerinden gerçek zamanlı oku ve hem ekrana bas hem parse et
+    # PTY master'dan oku, ekrana bas ve parse et
     while True:
         try:
             chunk = os.read(master_fd, 1024)
@@ -91,54 +66,72 @@ def scan_at(start: int, gpu_id: int):
         if not chunk:
             break
 
-        # VanitySearch'ün tüm çıktısını ekrana bas
+        # VanitySearch'ün tüm çıktısını göster
         os.write(sys.stdout.fileno(), chunk)
 
-        # Hit araması için satır tamponu
+        # 'Public Addr:' yakalamak için tamponu kontrol et
         buffer += chunk
         if b"\n" in buffer:
-            parts = buffer.split(b"\n")
-            for line in parts[:-1]:
+            lines = buffer.split(b"\n")
+            for line in lines[:-1]:
                 text = line.decode("utf-8", "ignore").strip()
                 if text.startswith("Public Addr:"):
-                    hit = True
+                    hit  = True
                     addr = text.split()[-1]
-            buffer = parts[-1]
+            buffer = lines[-1]
 
-    proc.wait()
+    p.wait()
     os.close(master_fd)
     return hit, addr
 
 
-def worker(gpu_id: int, ngpus: int):
-    """Her GPU için çalışan thread."""
-    next_start = make_block_sequencer(gpu_id, ngpus)
-    start = next_start()
-    scan_count = 0
+def worker(gpu_id: int):
+    """
+    Her GPU için:
+      - Rastgele bir blokla başlar,
+      - Eğer hit yoksa yeniden rastgele bir blok seçer,
+      - Eğer hit varsa 5 blok art arda tarar, sonra tekrar rastgele başlar.
+    """
+    print(f"[GPU {gpu_id}] Worker PID={os.getpid()} başlatıldı", flush=True)
 
-    print(f"\n→ GPU {gpu_id} başlatıldı (thread), CTRL-C ile durdurabilirsiniz.\n", flush=True)
+    current_start = None
+    window_rem    = 0
 
     try:
         while True:
-            hit, addr = scan_at(start, gpu_id)
-            scan_count += 1
+            if window_rem == 0:
+                # Yeni rastgele başlangıç
+                offset        = secrets.randbelow(MAX_OFFSET + 1)
+                current_start = KEY_MIN + offset
+                print(f"[GPU {gpu_id}] → RANDOM start @0x{current_start:x}", flush=True)
+
+                hit, addr = scan_at(current_start, gpu_id)
+                if hit:
+                    print(f"[GPU {gpu_id}]   !! hit: {addr}", flush=True)
+                    window_rem = 5
+                # hit yoksa loop devam, tekrar rastgele
+                continue
+
+            # window_rem > 0: ardışık 5 blok
+            current_start = wrap_inc(current_start)
+            print(f"[GPU {gpu_id}] → WINDOW scan @{window_rem} left @0x{current_start:x}", flush=True)
+            hit, addr = scan_at(current_start, gpu_id)
             if hit:
-                print(f"[GPU {gpu_id}]   !! public-hit: {addr}", flush=True)
-            if scan_count % 5 == 0:
-                # beş taramada bir durum raporu
-                print(f"[GPU {gpu_id}] [STATUS] scans={scan_count}, next will wrap_inc", flush=True)
-            # sıradaki blok
-            start = wrap_inc(start, BLOCK_SIZE)
-            # veya eğer isterseniz skip/continue mantığı ekleyin
+                print(f"[GPU {gpu_id}]   !! window-hit: {addr}", flush=True)
+            window_rem -= 1
+            # window dolunca, sıradaki loop yine rastgele'ye döner
+
     except KeyboardInterrupt:
-        print(f"\n>> GPU {gpu_id} durduruldu.", flush=True)
+        print(f"[GPU {gpu_id}] durduruldu", flush=True)
 
 
 def main():
-    ngpus = len(GPU_IDS)
+    # unbuffered stdout
+    sys.stdout.reconfigure(line_buffering=True)
+
     threads = []
-    for gpu_id in GPU_IDS:
-        t = threading.Thread(target=worker, args=(gpu_id, ngpus), daemon=True)
+    for gid in GPU_IDS:
+        t = threading.Thread(target=worker, args=(gid,), daemon=True)
         threads.append(t)
         t.start()
 
@@ -146,7 +139,7 @@ def main():
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\n>> Tüm GPU thread'leri durduruluyor...", flush=True)
+        print("\n>> Tüm GPU thread'leri sonlandırılıyor...", flush=True)
 
 
 if __name__ == "__main__":
