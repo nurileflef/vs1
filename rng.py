@@ -42,7 +42,7 @@ DEFAULT_CONTINUE = 2
 GPU_IDS = [0, 1, 2, 3]
 
 # ====== SKIP PENCERESİ ======
-SKIP_CYCLES      = 25
+SKIP_CYCLES      = 9
 SKIP_STEPS_MIN   = 1 << 8
 SKIP_STEPS_MAX   = 1 << 20
 
