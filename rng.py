@@ -10,7 +10,7 @@ from math import gcd
 # ====== KULLANICI AYARLARI ======
 KEY_MIN        = int("400000000000000000", 16)
 KEY_MAX        = int("7FFFFFFFFFFFFFFFFF", 16)
-RANGE_BITS     = 39
+RANGE_BITS     = 40
 BLOCK_SIZE     = 1 << RANGE_BITS
 KEYSPACE_LEN   = KEY_MAX - KEY_MIN + 1
 MAX_OFFSET     = KEYSPACE_LEN - BLOCK_SIZE
@@ -36,13 +36,13 @@ CONTINUE_MAP = {
     "1PWo3JeB9j":   20,
     "1PWo3JeB9":     2,
 }
-DEFAULT_CONTINUE = 2
+DEFAULT_CONTINUE = 1
 
 # ====== GPU LİSTESİ ======
 GPU_IDS = [0, 1, 2, 3]
 
 # ====== SKIP PENCERESİ ======
-SKIP_CYCLES      = 9
+SKIP_CYCLES      = 3
 SKIP_STEPS_MIN   = 1 << 8
 SKIP_STEPS_MAX   = 1 << 20
 
