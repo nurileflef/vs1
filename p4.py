@@ -1,186 +1,145 @@
 #!/usr/bin/env python3
-import secrets, random, subprocess, re, time, multiprocessing as mp, signal
+import os
+import sys
+import time
+import random
+import subprocess
+import re
+import multiprocessing
 
 # ====== KULLANICI AYARLARI ======
 KEY_MIN        = int("400000000000000000", 16)
 KEY_MAX        = int("7FFFFFFFFFFFFFFFFF", 16)
-RANGE_BITS     = 38
-BLOCK_SIZE     = 1 << RANGE_BITS
-KEYSPACE_LEN   = KEY_MAX - KEY_MIN + 1
-MAX_OFFSET     = KEYSPACE_LEN - BLOCK_SIZE
+RANGE_BITS     = 39
+SEGMENT_SIZE   = 1 << RANGE_BITS
+TOTAL_SEGMENTS = (KEY_MAX - KEY_MIN + SEGMENT_SIZE - 1) // SEGMENT_SIZE
 
-VANITY         = "./vanitysearch"
-ALL_FILE       = "ALL1.txt"
-PREFIX         = "1PWo3JeB9"
+VANITY       = "./vanitysearch"
+ALL_FILE     = "ALL1.txt"
+PREFIX       = "1PWo3JeB9"
 
-GPU_IDS        = [0, 1, 2, 3]   # 4 GPU
-N_GPUS         = len(GPU_IDS)
-STRIDE         = N_GPUS * BLOCK_SIZE
+# Prefix’e göre atlanacak segment miktarı
+SKIP_MAP = {
+    "1PWo3JeB9jr": 1,
+    "1PWo3JeB9j":  1,
+    "1PWo3JeB9":   5
+}
 
+# Prefix’e göre art arda no‐hit toleransı
 CONTINUE_MAP = {
     "1PWo3JeB9jr": 100,
-    "1PWo3JeB9j":   71,
-    "1PWo3JeB9":     3,
-    "1PWo3JeB":      1,
+    "1PWo3JeB9j":   50,
+    "1PWo3JeB9":    20
 }
 DEFAULT_CONTINUE = 3
 
-SKIP_CYCLES    = 25
-SKIP_BITS_MIN  = 40
-SKIP_BITS_MAX  = 64
+# İşlenmiş chunk’ları takip etmek için dosya
+DONE_FILE = "done_chunks.txt"
+LOCK = multiprocessing.Lock()
 
-def log(lock, gpu_id: int, msg: str):
-    with lock:
-        print(f"[GPU{gpu_id}] {msg}", flush=True)
+def load_done():
+    if not os.path.isfile(DONE_FILE):
+        return set()
+    with open(DONE_FILE) as f:
+        return set(int(l) for l in f if l.strip().isdigit())
 
-def random_start_for_gpu(gpu_id: int) -> int:
-    low_blk  = KEY_MIN >> RANGE_BITS
-    high_blk = KEY_MAX >> RANGE_BITS
-    first_offset = (gpu_id - (low_blk % N_GPUS)) % N_GPUS
-    first_blk    = low_blk + first_offset
-    if first_blk > high_blk:
-        blk_idx = low_blk
-    else:
-        total = ((high_blk - first_blk) // N_GPUS) + 1
-        r     = secrets.randbelow(total)
-        blk_idx = first_blk + r * N_GPUS
-    return blk_idx << RANGE_BITS
+def append_done(idx):
+    with LOCK:
+        with open(DONE_FILE, "a") as f:
+            f.write(f"{idx}\n")
 
-def wrap_inc(start: int, inc: int) -> int:
-    off = (start - KEY_MIN + inc) % (MAX_OFFSET + 1)
-    return KEY_MIN + off
+def scan_segment(idx: int, gpu_id: int):
+    start = KEY_MIN + idx * SEGMENT_SIZE
+    cmd = [
+        VANITY,
+        "-gpuId", str(gpu_id),
+        "-o", ALL_FILE,
+        "-start", f"{start:x}",
+        "-range", str(RANGE_BITS),
+        PREFIX
+    ]
+    print(f"[GPU {gpu_id}] >>> Running: {' '.join(cmd)}")
 
-def align_to_stride(inc: int) -> int:
-    return STRIDE if inc < STRIDE else (inc // STRIDE) * STRIDE
-
-def scan_at(lock, gpu_id: int, start: int):
-    sh = f"{start:x}"
-    log(lock, gpu_id, f">>> scan start=0x{sh}")
     p = subprocess.Popen(
-        [VANITY, "-gpuId", str(gpu_id), "-o", ALL_FILE,
-         "-start", sh, "-range", str(RANGE_BITS), PREFIX],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-        text=True, bufsize=1
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        bufsize=1
     )
-    header_done = False
-    hit = False
-    addr = priv = None
 
+    header_done = False
     for line in p.stdout:
         if not header_done:
-            log(lock, gpu_id, line.strip())
+            print(f"[GPU {gpu_id}] {line}", end="", flush=True)
             if line.startswith("GPU:"):
                 header_done = True
             continue
+
         if line.startswith("Public Addr:"):
-            hit, addr = True, line.split()[-1].strip()
-            log(lock, gpu_id, f"   !! public-hit: {addr}")
-        if "Priv (HEX):" in line and hit:
-            m = re.search(r"0x\s*([0-9A-Fa-f]+)", line)
-            if m:
-                priv = m.group(1).zfill(64)
-                log(lock, gpu_id, f"   >> privkey: {priv}")
+            addr = line.split()[-1].strip()
+            p.terminate()
+            p.wait()
+            return True, addr
+
+        m = re.search(r"Found:\s*([1-9]\d*)", line)
+        if m and int(m.group(1)) > 0:
+            p.terminate()
+            p.wait()
+            return True, None
+
     p.wait()
-    return hit, addr, priv
+    return False, None
 
-def worker(gpu_id: int, lock):
-    random.seed(secrets.randbits(64))
-    sorted_pfx      = sorted(CONTINUE_MAP.keys(), key=lambda p: -len(p))
-    start           = random_start_for_gpu(gpu_id)
-    scan_ct         = 0
-    initial_window  = 0
-    window_rem      = 0
-    skip_rem        = 0
-    last_main_start = 0
+def worker(gpu_id):
+    done = load_done()
+    cursor = random.randrange(TOTAL_SEGMENTS)
+    cont_count = 0
+    cont_limit = CONTINUE_MAP.get(PREFIX, DEFAULT_CONTINUE)
+    skip_step = SKIP_MAP.get(PREFIX, 1)
+    hit_streak = 0
 
-    log(lock, gpu_id, "→ Başladı")
+    while True:
+        if cursor in done:
+            cursor = (cursor + skip_step) % TOTAL_SEGMENTS
+            continue
 
-    try:
-        while True:
-            if window_rem > 0:
-                last_main_start = start
-                hit, addr, priv = scan_at(lock, gpu_id, start)
-                scan_ct += 1
-                if hit and priv:
-                    matched = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
-                    new_win = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
-                    if new_win > initial_window:
-                        initial_window = new_win
-                        log(lock, gpu_id, f"   >> nadir hit! window={initial_window}")
-                window_rem -= 1
-                log(lock, gpu_id, f"   >> [MAIN WINDOW] {initial_window-window_rem}/{initial_window}")
-                start = wrap_inc(start, STRIDE) if window_rem > 0 else start
-                if window_rem == 0:
-                    skip_rem = SKIP_CYCLES
-                    log(lock, gpu_id, f"   >> MAIN WINDOW bitti → skip-window={SKIP_CYCLES}")
+        print(f"[GPU {gpu_id}] -- segment {cursor}/{TOTAL_SEGMENTS-1}")
+        hit, addr = scan_segment(cursor, gpu_id)
+        print(f"[GPU {gpu_id}]    → scan complete; hit={hit}")
+
+        append_done(cursor)
+        done.add(cursor)
+
+        if hit and addr and addr.startswith(PREFIX):
+            cont_count = 0
+            hit_streak += 1
+            if hit_streak >= 4:
+                cursor = random.randrange(TOTAL_SEGMENTS)
+                hit_streak = 0
+                continue
+        else:
+            hit_streak = 0
+            cont_count += 1
+            if cont_count >= cont_limit:
+                cursor = random.randrange(TOTAL_SEGMENTS)
+                cont_count = 0
                 continue
 
-            if skip_rem > 0:
-                bit_skip    = random.randrange(SKIP_BITS_MIN, SKIP_BITS_MAX+1)
-                raw_skip    = 1 << bit_skip
-                skip_amt    = align_to_stride(raw_skip)
-                skip_start  = wrap_inc(last_main_start, skip_amt)
-                start       = skip_start
-                last_main_start = skip_start
-                log(lock, gpu_id, f"   >> [SKIP WINDOW] {SKIP_CYCLES-skip_rem+1}/{SKIP_CYCLES}: "
-                                   f"{bit_skip}-bit skip → 0x{start:x}")
-                hit, addr, priv = scan_at(lock, gpu_id, start)
-                scan_ct += 1
-                if hit and priv:
-                    matched = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
-                    initial_window = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
-                    window_rem = initial_window
-                    skip_rem   = SKIP_CYCLES
-                    start      = wrap_inc(start, STRIDE)
-                    log(lock, gpu_id, f"   >> SKIP-HIT! matched={matched}, window={initial_window}")
-                else:
-                    skip_rem -= 1
-                    if skip_rem == 0:
-                        start = random_start_for_gpu(gpu_id)
-                        log(lock, gpu_id, f"   >> SKIP WINDOW no-hit→ random_start")
-                continue
-
-            for _ in range(DEFAULT_CONTINUE):
-                hit, addr, priv = scan_at(lock, gpu_id, start)
-                scan_ct += 1
-                if hit and priv:
-                    matched        = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
-                    initial_window = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
-                    window_rem     = initial_window
-                    start          = wrap_inc(start, STRIDE)
-                    log(lock, gpu_id, f"   >> SEQ-HIT! matched={matched}, window={initial_window}")
-                    break
-                else:
-                    start = wrap_inc(start, STRIDE)
-            else:
-                start = random_start_for_gpu(gpu_id)
-
-            if scan_ct % 10 == 0:
-                log(lock, gpu_id, f"[STATUS] scans={scan_ct}, next=0x{start:x}")
-
-    except KeyboardInterrupt:
-        log(lock, gpu_id, ">> Exiting")
+        cursor = (cursor + skip_step) % TOTAL_SEGMENTS
 
 def main():
-    mp.set_start_method("spawn", force=True)
-    lock = mp.Lock()
-    procs = []
-    try:
-        for gid in GPU_IDS:
-            p = mp.Process(target=worker, args=(gid, lock), daemon=True)
-            p.start()
-            procs.append(p)
-        while any(p.is_alive() for p in procs):
-            time.sleep(0.5)
-    except KeyboardInterrupt:
-        print("\n[MAIN] Durduruluyor...", flush=True)
-    finally:
-        for p in procs:
-            if p.is_alive():
-                p.terminate()
-        for p in procs:
-            p.join()
+    print(">> Multi-GPU VanitySearch Başlatılıyor...")
+    print(f"Toplam segment: {TOTAL_SEGMENTS} @2^{RANGE_BITS}\n")
+
+    workers = []
+    for gpu_id in range(4):  # 4 GPU
+        p = multiprocessing.Process(target=worker, args=(gpu_id,))
+        p.start()
+        workers.append(p)
+
+    for p in workers:
+        p.join()
 
 if __name__ == "__main__":
     main()
-
