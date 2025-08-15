@@ -2,54 +2,62 @@
 import os
 import sys
 import time
-import random
+import secrets
 import subprocess
-import re
-import multiprocessing
+import threading
+import pty
+from math import gcd
 
 # ====== KULLANICI AYARLARI ======
-KEY_MIN        = int("400000000000000000", 16)
-KEY_MAX        = int("7FFFFFFFFFFFFFFFFF", 16)
-RANGE_BITS     = 40
-SEGMENT_SIZE   = 1 << RANGE_BITS
-TOTAL_SEGMENTS = (KEY_MAX - KEY_MIN + SEGMENT_SIZE - 1) // SEGMENT_SIZE
+KEY_MIN      = int("400000000000000000", 16)
+KEY_MAX      = int("7FFFFFFFFFFFFFFFFF", 16)
+RANGE_BITS   = 39
+BLOCK_SIZE   = 1 << RANGE_BITS
+KEYSPACE_LEN = KEY_MAX - KEY_MIN + 1
+MAX_OFFSET   = KEYSPACE_LEN - BLOCK_SIZE
+N_BLOCKS     = KEYSPACE_LEN // BLOCK_SIZE
 
-VANITY       = "./vanitysearch"
-ALL_FILE     = "ALL1.txt"
-PREFIX       = "1PWo3JeB9"
+VANITY     = "./vanitysearch"
+ALL_FILE   = "ALL1.txt"
+PREFIX     = "1PWo3JeB9"
 
-# Prefix’e göre atlanacak segment miktarı
-SKIP_MAP = {
-    "1PWo3JeB9jr": 1,
-    "1PWo3JeB9j":  1,
-    "1PWo3JeB9":   5
-}
+GPU_IDS    = [0, 1, 2, 3]
 
-# Prefix’e göre art arda no‐hit toleransı
-CONTINUE_MAP = {
-    "1PWo3JeB9jr": 15,
-    "1PWo3JeB9j":   10,
-    "1PWo3JeB9":    4
-}
-DEFAULT_CONTINUE = 2
 
-# İşlenmiş chunk’ları takip etmek için dosya
-DONE_FILE = "done_chunks.txt"
-LOCK = multiprocessing.Lock()
+def wrap_inc(start: int, inc: int = BLOCK_SIZE) -> int:
+    """KEY_MIN…KEY_MAX arasında wrap-around ile inc artışı."""
+    off = (start - KEY_MIN + inc) % (MAX_OFFSET + 1)
+    return KEY_MIN + off
 
-def load_done():
-    if not os.path.isfile(DONE_FILE):
-        return set()
-    with open(DONE_FILE) as f:
-        return set(int(l) for l in f if l.strip().isdigit())
 
-def append_done(idx):
-    with LOCK:
-        with open(DONE_FILE, "a") as f:
-            f.write(f"{idx}\n")
+def make_block_sequencer(gpu_id: int, ngpus: int):
+    """Çakışmasız, permütasyon bazlı blok sıralayıcı."""
+    a = secrets.randbelow(N_BLOCKS) | 1
+    while gcd(a, N_BLOCKS) != 1:
+        a = secrets.randbelow(N_BLOCKS) | 1
+    b = secrets.randbelow(N_BLOCKS)
+    step = -1
 
-def scan_segment(idx: int, gpu_id: int):
-    start = KEY_MIN + idx * SEGMENT_SIZE
+    def next_start(delta_steps: int = 1) -> int:
+        nonlocal step
+        step = (step + delta_steps) % N_BLOCKS
+        i = (step * ngpus + gpu_id) % N_BLOCKS
+        idx = (a * i + b) % N_BLOCKS
+        start = KEY_MIN + idx * BLOCK_SIZE
+        print(f">>> [GPU {gpu_id}] next_seq: idx={idx} start=0x{start:x}", flush=True)
+        return start
+
+    return next_start
+
+
+def scan_at(start: int, gpu_id: int):
+    """
+    scan_start mesajı ve VanitySearch'ü gerçek TTY modunda çağır.
+    -o ALL1.txt bayrağı ile sonuçları ALL1.txt'ye yazar.
+    Public Addr satırlarını da yakalar.
+    """
+    print(f">>> [GPU {gpu_id}] scan start=0x{start:x}", flush=True)
+
     cmd = [
         VANITY,
         "-gpuId", str(gpu_id),
@@ -58,89 +66,88 @@ def scan_segment(idx: int, gpu_id: int):
         "-range", str(RANGE_BITS),
         PREFIX
     ]
-    print(f"[GPU {gpu_id}] >>> Running: {' '.join(cmd)}")
 
-    p = subprocess.Popen(
+    # PTY master/slave aç
+    master_fd, slave_fd = pty.openpty()
+    proc = subprocess.Popen(
         cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1
+        stdin=subprocess.DEVNULL,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        close_fds=True
     )
+    os.close(slave_fd)
 
-    header_done = False
-    for line in p.stdout:
-        if not header_done:
-            print(f"[GPU {gpu_id}] {line}", end="", flush=True)
-            if line.startswith("GPU:"):
-                header_done = True
-            continue
+    hit = False
+    addr = None
+    buffer = b""
 
-        if line.startswith("Public Addr:"):
-            addr = line.split()[-1].strip()
-            p.terminate()
-            p.wait()
-            return True, addr
-
-        m = re.search(r"Found:\s*([1-9]\d*)", line)
-        if m and int(m.group(1)) > 0:
-            p.terminate()
-            p.wait()
-            return True, None
-
-    p.wait()
-    return False, None
-
-def worker(gpu_id):
-    done = load_done()
-    cursor = random.randrange(TOTAL_SEGMENTS)
-    cont_count = 0
-    cont_limit = CONTINUE_MAP.get(PREFIX, DEFAULT_CONTINUE)
-    skip_step = SKIP_MAP.get(PREFIX, 1)
-    hit_streak = 0
-
+    # PTY üzerinden gerçek zamanlı oku ve hem ekrana bas hem parse et
     while True:
-        if cursor in done:
-            cursor = (cursor + skip_step) % TOTAL_SEGMENTS
-            continue
+        try:
+            chunk = os.read(master_fd, 1024)
+        except OSError:
+            break
+        if not chunk:
+            break
 
-        print(f"[GPU {gpu_id}] -- segment {cursor}/{TOTAL_SEGMENTS-1}")
-        hit, addr = scan_segment(cursor, gpu_id)
-        print(f"[GPU {gpu_id}]    → scan complete; hit={hit}")
+        # VanitySearch'ün tüm çıktısını ekrana bas
+        os.write(sys.stdout.fileno(), chunk)
 
-        append_done(cursor)
-        done.add(cursor)
+        # Hit araması için satır tamponu
+        buffer += chunk
+        if b"\n" in buffer:
+            parts = buffer.split(b"\n")
+            for line in parts[:-1]:
+                text = line.decode("utf-8", "ignore").strip()
+                if text.startswith("Public Addr:"):
+                    hit = True
+                    addr = text.split()[-1]
+            buffer = parts[-1]
 
-        if hit and addr and addr.startswith(PREFIX):
-            cont_count = 0
-            hit_streak += 1
-            if hit_streak >= 4:
-                cursor = random.randrange(TOTAL_SEGMENTS)
-                hit_streak = 0
-                continue
-        else:
-            hit_streak = 0
-            cont_count += 1
-            if cont_count >= cont_limit:
-                cursor = random.randrange(TOTAL_SEGMENTS)
-                cont_count = 0
-                continue
+    proc.wait()
+    os.close(master_fd)
+    return hit, addr
 
-        cursor = (cursor + skip_step) % TOTAL_SEGMENTS
+
+def worker(gpu_id: int, ngpus: int):
+    """Her GPU için çalışan thread."""
+    next_start = make_block_sequencer(gpu_id, ngpus)
+    start = next_start()
+    scan_count = 0
+
+    print(f"\n→ GPU {gpu_id} başlatıldı (thread), CTRL-C ile durdurabilirsiniz.\n", flush=True)
+
+    try:
+        while True:
+            hit, addr = scan_at(start, gpu_id)
+            scan_count += 1
+            if hit:
+                print(f"[GPU {gpu_id}]   !! public-hit: {addr}", flush=True)
+            if scan_count % 5 == 0:
+                # beş taramada bir durum raporu
+                print(f"[GPU {gpu_id}] [STATUS] scans={scan_count}, next will wrap_inc", flush=True)
+            # sıradaki blok
+            start = wrap_inc(start, BLOCK_SIZE)
+            # veya eğer isterseniz skip/continue mantığı ekleyin
+    except KeyboardInterrupt:
+        print(f"\n>> GPU {gpu_id} durduruldu.", flush=True)
+
 
 def main():
-    print(">> Multi-GPU VanitySearch Başlatılıyor...")
-    print(f"Toplam segment: {TOTAL_SEGMENTS} @2^{RANGE_BITS}\n")
+    ngpus = len(GPU_IDS)
+    threads = []
+    for gpu_id in GPU_IDS:
+        t = threading.Thread(target=worker, args=(gpu_id, ngpus), daemon=True)
+        threads.append(t)
+        t.start()
 
-    workers = []
-    for gpu_id in range(4):  # 4 GPU
-        p = multiprocessing.Process(target=worker, args=(gpu_id,))
-        p.start()
-        workers.append(p)
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\n>> Tüm GPU thread'leri durduruluyor...", flush=True)
 
-    for p in workers:
-        p.join()
 
 if __name__ == "__main__":
     main()
-
