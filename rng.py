@@ -21,7 +21,7 @@ def print(*args, **kwargs):
 # ====== KULLANICI AYARLARI ======
 KEY_MIN        = int("400000000000000000", 16)
 KEY_MAX        = int("7FFFFFFFFFFFFFFFFF", 16)
-RANGE_BITS     = 38
+RANGE_BITS     = 40
 BLOCK_SIZE     = 1 << RANGE_BITS
 KEYSPACE_LEN   = KEY_MAX - KEY_MIN + 1
 MAX_OFFSET     = KEYSPACE_LEN - BLOCK_SIZE
@@ -31,15 +31,15 @@ ALL_FILE       = "ALL1.txt"
 PREFIX         = "1PWo3JeB9"
 
 CONTINUE_MAP = {
-    "1PWo3JeB9jr": 75,
-    "1PWo3JeB9j":  25,
-    "1PWo3JeB9":   10,
+    "1PWo3JeB9jr": 20,
+    "1PWo3JeB9j":  5,
+    "1PWo3JeB9":   3,
     "1PWo3JeB":    1,
 }
-DEFAULT_CONTINUE = 3
+DEFAULT_CONTINUE = 1
 
 # ====== SKIP WINDOW PARAMETRELERİ ======
-SKIP_CYCLES    = 20
+SKIP_CYCLES    = 5
 SKIP_BITS_MIN  = 55
 SKIP_BITS_MAX  = 64
 
