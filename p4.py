@@ -4,7 +4,9 @@ import random
 import subprocess
 import re
 import time
-import threading
+import multiprocessing as mp
+import signal
+import sys
 
 # ====== KULLANICI AYARLARI ======
 KEY_MIN        = int("400000000000000000", 16)
@@ -15,53 +17,64 @@ KEYSPACE_LEN   = KEY_MAX - KEY_MIN + 1
 MAX_OFFSET     = KEYSPACE_LEN - BLOCK_SIZE
 
 VANITY         = "./vanitysearch"
-ALL_FILE       = "ALL1.txt"
-PREFIX         = "1PWo3JeB"
+ALL_FILE_TPL   = "ALL1.txt"
+PREFIX         = "1PWo3JeB9"
+
+# Çoklu GPU
+GPU_IDS        = [0, 1, 2, 3]   # 4 GPU
+N_GPUS         = len(GPU_IDS)
+STRIDE         = N_GPUS * BLOCK_SIZE  # Çakışmasız blok atlama adımı
 
 CONTINUE_MAP = {
     "1PWo3JeB9jr": 100,
     "1PWo3JeB9j":   71,
-    "1PWo3JeB9":     15,
-    "1PWo3JeB":      5,
+    "1PWo3JeB9":     3,
+    "1PWo3JeB":      1,
 }
-DEFAULT_CONTINUE = 5
+DEFAULT_CONTINUE = 3
 
+# ====== SKIP WINDOW PARAMETRELERİ ======
+SKIP_CYCLES    = 25
 SKIP_BITS_MIN  = 55
 SKIP_BITS_MAX  = 64
 
-TOTAL_GPUS     = 4
-RESEED_EVERY   = 15
-RESEED_JITTER  = 5
+def log(gpu_id: int, msg: str):
+    print(f"[GPU{gpu_id}] {msg}", flush=True)
 
-# ====== YARDIMCI ======
-def block_index_from_start(start: int) -> int:
-    return (start - KEY_MIN) >> RANGE_BITS
-
-def random_start(gpu_id=0, total_gpus=1):
-    """
-    GPU sınıfına uygun random blok index seçer.
-    Alt bitler sıfır kalır (blok hizalı), üst bitler dağınık olur.
-    """
+def random_start_for_gpu(gpu_id: int) -> int:
     low_blk  = KEY_MIN >> RANGE_BITS
     high_blk = KEY_MAX >> RANGE_BITS
-    bit_len  = (high_blk - low_blk + 1).bit_length()
 
-    while True:
-        blk_idx = secrets.randbits(bit_len)
-        if low_blk <= blk_idx <= high_blk and (blk_idx % total_gpus) == gpu_id:
-            start = blk_idx << RANGE_BITS
-            print(f">>> [GPU {gpu_id}] random_start → 0x{start:x} (block={blk_idx})")
-            return start
+    # Bu GPU'nun sorumlu olduğu blok sınıfını bul (mod N_GPUS)
+    first_offset = (gpu_id - (low_blk % N_GPUS)) % N_GPUS
+    first_blk    = low_blk + first_offset
+    if first_blk > high_blk:
+        # Teorik köşe durum: aralık çok küçükse
+        blk_idx = low_blk
+    else:
+        total = ((high_blk - first_blk) // N_GPUS) + 1
+        r     = secrets.randbelow(total)
+        blk_idx = first_blk + r * N_GPUS
+
+    start = blk_idx << RANGE_BITS
+    log(gpu_id, f">>> random_start → start=0x{start:x}")
+    return start
 
 def wrap_inc(start: int, inc: int) -> int:
     off = (start - KEY_MIN + inc) % (MAX_OFFSET + 1)
     return KEY_MIN + off
 
-def scan_at(start: int, gpu_id: int):
+def align_to_stride(inc: int) -> int:
+    # Skip miktarını STRIDE'a hizala ki GPU kümeleri çakışmasın
+    if inc < STRIDE:
+        return STRIDE
+    return (inc // STRIDE) * STRIDE
+
+def scan_at(gpu_id: int, start: int):
     sh = f"{start:x}"
-    print(f">>> [GPU {gpu_id}] scan start=0x{sh}")
+    log(gpu_id, f">>> scan start=0x{sh}")
     p = subprocess.Popen(
-        [VANITY, "-gpuId", str(gpu_id), "-o", ALL_FILE,
+        [VANITY, "-gpuId", str(gpu_id), "-o", ALL_FILE_TPL.format(gpu=gpu_id),
          "-start", sh, "-range", str(RANGE_BITS), PREFIX],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         text=True, bufsize=1
@@ -72,125 +85,145 @@ def scan_at(start: int, gpu_id: int):
 
     for line in p.stdout:
         if not header_done:
-            print(line, end="", flush=True)
+            print(f"[GPU{gpu_id}] {line}", end="", flush=True)
             if line.startswith("GPU:"):
                 header_done = True
             continue
         if line.startswith("Public Addr:"):
             hit, addr = True, line.split()[-1].strip()
-            print(f"[GPU {gpu_id}]   !! public-hit: {addr}")
+            log(gpu_id, f"   !! public-hit: {addr}")
         if "Priv (HEX):" in line and hit:
             m = re.search(r"0x\s*([0-9A-Fa-f]+)", line)
             if m:
                 priv = m.group(1).zfill(64)
-                print(f"[GPU {gpu_id}]   >> privkey: {priv}")
+                log(gpu_id, f"   >> privkey: {priv}")
 
     p.wait()
     return hit, addr, priv
 
-def reseed_threshold() -> int:
-    if RESEED_JITTER <= 0:
-        return max(1, RESEED_EVERY)
-    delta = secrets.randbelow(2 * RESEED_JITTER + 1) - RESEED_JITTER
-    return max(1, RESEED_EVERY + delta)
-
 def worker(gpu_id: int):
-    sorted_pfx = sorted(CONTINUE_MAP.keys(), key=lambda p: -len(p))
+    random.seed(secrets.randbits(64))  # süreç başına RNG çeşitliliği
+    sorted_pfx      = sorted(CONTINUE_MAP.keys(), key=lambda p: -len(p))
+    start           = random_start_for_gpu(gpu_id)
+    scan_ct         = 0
 
-    start               = random_start(gpu_id=gpu_id, total_gpus=TOTAL_GPUS)
-    scan_ct             = 0
-    extra_skips         = 0
-    miss_ct             = 0
+    # Ana pencere
+    initial_window  = 0
+    window_rem      = 0
 
-    scans_since_reseed  = 0
-    reseed_target       = reseed_threshold()
-    reseed_pending      = False
+    # Skip-window
+    skip_rem        = 0
+    last_main_start = 0
 
-    print(f"\n→ GPU {gpu_id} skip-modunda başlatıldı. CTRL-C ile durdurabilirsiniz.\n")
+    log(gpu_id, "→ CTRL-C to stop")
 
     try:
         while True:
-            if extra_skips > 0:
-                bit_skip = random.randrange(SKIP_BITS_MIN, SKIP_BITS_MAX + 1)
-                start    = wrap_inc(start, 1 << bit_skip)
-
-                step_idx = (CONTINUE_MAP.get(PREFIX, DEFAULT_CONTINUE) - extra_skips + 1)
-                print(f"[GPU {gpu_id}]   >> [SKIP-AFTER-HIT] step={step_idx}, {bit_skip}-bit skip → 0x{start:x}")
-
-                hit, addr, priv = scan_at(start, gpu_id)
+            # 1) Main-window içindeki tarama
+            if window_rem > 0:
+                last_main_start = start
+                hit, addr, priv = scan_at(gpu_id, start)
                 scan_ct += 1
-                scans_since_reseed += 1
 
                 if hit and priv:
-                    matched     = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
-                    extra_skips = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
-                    miss_ct     = 0
-                    print(f"[GPU {gpu_id}]   >> HIT in extra-skip! matched={matched}, reset extra_skips={extra_skips}\n")
+                    matched = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
+                    new_win = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
+                    if new_win > initial_window:
+                        initial_window = new_win
+                        log(gpu_id, f"   >> nadir hit! window={initial_window}")
+
+                window_rem -= 1
+                log(gpu_id, f"   >> [MAIN WINDOW] {initial_window-window_rem}/{initial_window}")
+
+                if window_rem > 0:
+                    start = wrap_inc(start, STRIDE)
                 else:
-                    extra_skips -= 1
-                    miss_ct     += 1
-
-                if scans_since_reseed >= reseed_target:
-                    reseed_pending = True
-
-                if extra_skips == 0 and reseed_pending:
-                    old = start
-                    start = random_start(gpu_id=gpu_id, total_gpus=TOTAL_GPUS)
-                    scans_since_reseed = 0
-                    reseed_target      = reseed_threshold()
-                    reseed_pending     = False
-                    print(f"🔄 [GPU {gpu_id}] reseed (post-extra): old=0x{old:x} → new=0x{start:x} | next threshold={reseed_target}")
-
-                if scan_ct % 10 == 0:
-                    print(f"[GPU {gpu_id}] [STATUS] scans={scan_ct}, next=0x{start:x}")
+                    skip_rem = SKIP_CYCLES
+                    log(gpu_id, f"   >> MAIN WINDOW bitti → skip-window={SKIP_CYCLES}\n")
                 continue
 
-            bit_skip = random.randrange(SKIP_BITS_MIN, SKIP_BITS_MAX + 1)
-            start    = wrap_inc(start, 1 << bit_skip)
-            print(f"[GPU {gpu_id}]   >> [SKIP] {bit_skip}-bit skip → 0x{start:x}")
+            # 2) Skip-window içindeki tarama
+            if skip_rem > 0:
+                bit_skip    = random.randrange(SKIP_BITS_MIN, SKIP_BITS_MAX+1)
+                raw_skip    = 1 << bit_skip          # 2^k ve her hâlükârda BLOCK_SIZE'ın katı
+                skip_amt    = align_to_stride(raw_skip)
+                skip_start  = wrap_inc(last_main_start, skip_amt)
+                start       = skip_start
+                last_main_start = skip_start
 
-            hit, addr, priv = scan_at(start, gpu_id)
-            scan_ct += 1
-            scans_since_reseed += 1
+                log(gpu_id, f"   >> [SKIP WINDOW] "
+                            f"{SKIP_CYCLES-skip_rem+1}/{SKIP_CYCLES}: "
+                            f"{bit_skip}-bit skip (aligned) → 0x{start:x}")
 
-            if hit and priv:
-                matched     = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
-                extra_skips = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
-                miss_ct     = 0
-                print(f"[GPU {gpu_id}]   >> HIT! matched={matched}, schedule extra_skips={extra_skips}\n")
+                hit, addr, priv = scan_at(gpu_id, start)
+                scan_ct += 1
+
+                if hit and priv:
+                    matched = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
+                    new_win = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
+
+                    if new_win > initial_window:
+                        initial_window = new_win
+                    window_rem = initial_window
+                    skip_rem   = SKIP_CYCLES
+                    start      = wrap_inc(start, STRIDE)
+                    log(gpu_id, f"   >> SKIP-HIT! matched={matched}, window={initial_window}\n")
+                else:
+                    skip_rem -= 1
+                    if skip_rem == 0:
+                        start = random_start_for_gpu(gpu_id)
+                        log(gpu_id, f"   >> SKIP WINDOW no-hit→ random_start\n")
+                continue
+
+            # 3) Seq-window (DEFAULT_CONTINUE blok)
+            for _ in range(DEFAULT_CONTINUE):
+                hit, addr, priv = scan_at(gpu_id, start)
+                scan_ct += 1
+                if hit and priv:
+                    matched        = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
+                    initial_window = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
+                    window_rem     = initial_window
+                    start          = wrap_inc(start, STRIDE)
+                    log(gpu_id, f"   >> SEQ-HIT! matched={matched}, window={initial_window}\n")
+                    break
+                else:
+                    start = wrap_inc(start, STRIDE)
             else:
-                miss_ct += 1
-
-            if scans_since_reseed >= reseed_target and extra_skips == 0:
-                old = start
-                start = random_start(gpu_id=gpu_id, total_gpus=TOTAL_GPUS)
-                scans_since_reseed = 0
-                reseed_target      = reseed_threshold()
-                print(f"🔄 [GPU {gpu_id}] reseed: old=0x{old:x} → new=0x{start:x} | next threshold={reseed_target}")
+                start = random_start_for_gpu(gpu_id)
 
             if scan_ct % 10 == 0:
-                cls = block_index_from_start(start) % TOTAL_GPUS
-                print(f"[GPU {gpu_id}] [STATUS] scans={scan_ct}, next=0x{start:x}, class={cls}")
+                log(gpu_id, f"[STATUS] scans={scan_ct}, next=0x{start:x}")
 
     except KeyboardInterrupt:
-        print(f"\n>> GPU {gpu_id} durduruldu.")
+        log(gpu_id, ">> Exiting")
 
 def main():
-    threads = []
-    for gpu_id in range(TOTAL_GPUS):
-        t = threading.Thread(target=worker, args=(gpu_id,), daemon=True)
-        threads.append(t)
-        t.start()
-
+    # Ctrl-C tüm çocukları güzelce kapatsın
+    original_sigint = signal.getsignal(signal.SIGINT)
+    procs = []
     try:
-        while True:
-            time.sleep(1)
+        for gid in GPU_IDS:
+            p = mp.Process(target=worker, args=(gid,), daemon=True)
+            p.start()
+            procs.append(p)
+
+        # Ana süreç çocukları izler
+        while any(p.is_alive() for p in procs):
+            time.sleep(0.5)
     except KeyboardInterrupt:
-        print("\n>> Tüm GPU işlemleri durduruluyor...")
+        print("\n[MAIN] SIGINT: terminating workers...", flush=True)
+    finally:
+        for p in procs:
+            if p.is_alive():
+                p.terminate()
+        for p in procs:
+            p.join(timeout=2.0)
+        signal.signal(signal.SIGINT, original_sigint)
 
 if __name__ == "__main__":
+    # Windows uyumu için
+    try:
+        mp.set_start_method("spawn", force=True)
+    except RuntimeError:
+        pass
     main()
-
-
-
-
