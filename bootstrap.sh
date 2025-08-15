@@ -9,14 +9,12 @@ source venv/bin/activate
 # 2. Gerekli paketler
 pip install requests watchdog python-dotenv
 
-# 3. DRBG modülünü oluştur
+# 3. DRBG modülünü oluştur (UUID destekli, her çalıştırmada farklı seed)
 cat << 'EOF' > user_drbg.py
-import os, time, hmac, hashlib, struct
+import os, time, hmac, hashlib, struct, uuid
 
-# Metadata: hostname veya POD ID
 _meta = os.getenv("HOSTNAME", "")
 
-# Jitter tabanlı entropy toplama
 def _collect_jitter(samples=256):
     data = bytearray()
     for _ in range(samples):
@@ -26,11 +24,11 @@ def _collect_jitter(samples=256):
         data += struct.pack(">Q", t2 - t1)
     return bytes(data)
 
-# Az miktar urandom
 _rnd = os.urandom(32)
+_once_uuid = uuid.uuid4().bytes
 
-# Seed malzemesini birleştir ve HMAC-SHA256 DRBG başlat
-_seed = hmac.new(b"bootstrap-drbg", _meta.encode() + _collect_jitter() + _rnd, hashlib.sha256).digest()
+_seed_material = _meta.encode() + _collect_jitter() + _rnd + _once_uuid
+_seed = hmac.new(b"bootstrap-drbg", _seed_material, hashlib.sha256).digest()
 _counter = 0
 
 def randbelow(n):
