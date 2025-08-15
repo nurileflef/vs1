@@ -10,7 +10,7 @@ import multiprocessing
 # ====== KULLANICI AYARLARI ======
 KEY_MIN        = int("400000000000000000", 16)
 KEY_MAX        = int("7FFFFFFFFFFFFFFFFF", 16)
-RANGE_BITS     = 39
+RANGE_BITS     = 40
 SEGMENT_SIZE   = 1 << RANGE_BITS
 TOTAL_SEGMENTS = (KEY_MAX - KEY_MIN + SEGMENT_SIZE - 1) // SEGMENT_SIZE
 
@@ -27,11 +27,11 @@ SKIP_MAP = {
 
 # Prefix’e göre art arda no‐hit toleransı
 CONTINUE_MAP = {
-    "1PWo3JeB9jr": 100,
-    "1PWo3JeB9j":   50,
-    "1PWo3JeB9":    20
+    "1PWo3JeB9jr": 15,
+    "1PWo3JeB9j":   10,
+    "1PWo3JeB9":    4
 }
-DEFAULT_CONTINUE = 3
+DEFAULT_CONTINUE = 2
 
 # İşlenmiş chunk’ları takip etmek için dosya
 DONE_FILE = "done_chunks.txt"
@@ -143,3 +143,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
