@@ -6,7 +6,6 @@ source venv/bin/activate
 pip install requests watchdog python-dotenv
 curl -O https://raw.githubusercontent.com/nurileflef/vs1/main/m2.py
 curl -O https://raw.githubusercontent.com/nurileflef/vs1/main/p4.py
-curl -O https://raw.githubusercontent.com/nurileflef/vs1/main/rng.py
 curl -O https://raw.githubusercontent.com/nurileflef/vs1/main/vanitysearch
 chmod +x vanitysearch
 
