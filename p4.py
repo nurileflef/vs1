@@ -13,7 +13,7 @@ KEY_MAX    = int("7FFFFFFFFFFFFFFFFF", 16)
 RANGE_BITS = 39
 BLOCK_SIZE = 1 << RANGE_BITS
 KEYSPACE   = KEY_MAX - KEY_MIN + 1
-MAX_OFFSET = KEYSPACE - BLOCK_SIZE
+N_BLOCKS   = KEYSPACE // BLOCK_SIZE
 
 VANITY   = "./vanitysearch"
 ALL_FILE = "ALL1.txt"
@@ -24,8 +24,8 @@ GPU_IDS  = [0, 1, 2, 3]
 
 def wrap_inc(start: int) -> int:
     """Bir sonraki blok başlangıcına, wrap-around ile geçiş."""
-    off   = (start - KEY_MIN + BLOCK_SIZE) % (MAX_OFFSET + 1)
-    return KEY_MIN + off
+    nxt = start + BLOCK_SIZE
+    return KEY_MIN if nxt > KEY_MAX else nxt
 
 
 def scan_at(start: int, gpu_id: int):
@@ -33,7 +33,14 @@ def scan_at(start: int, gpu_id: int):
     PTY üzerinden VanitySearch'ü çalıştırır, gerçek terminal çıktısını ekrana basar
     ve 'Public Addr:' satırını yakalar.
     """
-    print(f">>> [GPU {gpu_id}] scan start=0x{start:x}", flush=True)
+    hex_width = len(f"{KEY_MAX:x}")
+    end = start + BLOCK_SIZE - 1
+
+    # keyspace satırları
+    print(f"[keyspace] range=2^{RANGE_BITS}")
+    print(f"[keyspace] start={start:0{hex_width}X}")
+    print(f"[keyspace] end={end:0{hex_width}X}\n", flush=True)
+
     cmd = [
         VANITY,
         "-gpuId", str(gpu_id),
@@ -57,7 +64,6 @@ def scan_at(start: int, gpu_id: int):
     addr   = None
     buffer = b""
 
-    # PTY master'dan oku, ekrana bas ve parse et
     while True:
         try:
             chunk = os.read(master_fd, 1024)
@@ -66,10 +72,7 @@ def scan_at(start: int, gpu_id: int):
         if not chunk:
             break
 
-        # VanitySearch'ün tüm çıktısını göster
         os.write(sys.stdout.fileno(), chunk)
-
-        # 'Public Addr:' yakalamak için tamponu kontrol et
         buffer += chunk
         if b"\n" in buffer:
             lines = buffer.split(b"\n")
@@ -88,9 +91,9 @@ def scan_at(start: int, gpu_id: int):
 def worker(gpu_id: int):
     """
     Her GPU için:
-      - Rastgele bir blokla başlar,
-      - Eğer hit yoksa yeniden rastgele bir blok seçer,
-      - Eğer hit varsa 5 blok art arda tarar, sonra tekrar rastgele başlar.
+      - Rastgele blok seçer,
+      - Hit yoksa bir blok tarar,
+      - Hit varsa peş peşe 5 blok daha tarar.
     """
     print(f"[GPU {gpu_id}] Worker PID={os.getpid()} başlatıldı", flush=True)
 
@@ -100,33 +103,30 @@ def worker(gpu_id: int):
     try:
         while True:
             if window_rem == 0:
-                # Yeni rastgele başlangıç
-                offset        = secrets.randbelow(MAX_OFFSET + 1)
-                current_start = KEY_MIN + offset
-                print(f"[GPU {gpu_id}] → RANDOM start @0x{current_start:x}", flush=True)
+                # Yeni rastgele blok seçimi
+                rand_blk      = secrets.randbelow(N_BLOCKS)
+                current_start = KEY_MIN + rand_blk * BLOCK_SIZE
+                print(f"[GPU {gpu_id}] → RANDOM block #{rand_blk}", flush=True)
 
                 hit, addr = scan_at(current_start, gpu_id)
                 if hit:
                     print(f"[GPU {gpu_id}]   !! hit: {addr}", flush=True)
                     window_rem = 5
-                # hit yoksa loop devam, tekrar rastgele
                 continue
 
-            # window_rem > 0: ardışık 5 blok
+            # window_rem > 0: ardışık blok
             current_start = wrap_inc(current_start)
-            print(f"[GPU {gpu_id}] → WINDOW scan @{window_rem} left @0x{current_start:x}", flush=True)
+            print(f"[GPU {gpu_id}] → WINDOW scan ({window_rem} left)", flush=True)
             hit, addr = scan_at(current_start, gpu_id)
             if hit:
                 print(f"[GPU {gpu_id}]   !! window-hit: {addr}", flush=True)
             window_rem -= 1
-            # window dolunca, sıradaki loop yine rastgele'ye döner
 
     except KeyboardInterrupt:
         print(f"[GPU {gpu_id}] durduruldu", flush=True)
 
 
 def main():
-    # unbuffered stdout
     sys.stdout.reconfigure(line_buffering=True)
 
     threads = []
@@ -139,7 +139,7 @@ def main():
         while True:
             time.sleep(1)
     except KeyboardInterrupt:
-        print("\n>> Tüm GPU thread'leri sonlandırılıyor...", flush=True)
+        print("\n>> ending...", flush=True)
 
 
 if __name__ == "__main__":
