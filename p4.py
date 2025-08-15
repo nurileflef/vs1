@@ -10,7 +10,7 @@ KEYSPACE_LEN   = KEY_MAX - KEY_MIN + 1
 MAX_OFFSET     = KEYSPACE_LEN - BLOCK_SIZE
 
 VANITY         = "./vanitysearch"
-ALL_FILE       = "ALL.txt"
+ALL_FILE       = "ALL1.txt"
 PREFIX         = "1PWo3JeB9"
 
 GPU_IDS        = [0, 1, 2, 3]   # 4 GPU
@@ -183,3 +183,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
