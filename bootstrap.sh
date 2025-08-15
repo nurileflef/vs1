@@ -52,7 +52,7 @@ curl -fsSL -O https://raw.githubusercontent.com/nurileflef/vs1/main/vanitysearch
 chmod +x vanitysearch
 
 # 5. secrets.randbelow()’ı DRBG ile override et
-for pyf in m2.py p4.py; do
+for pyf in m2.py rng.py; do
   sed -i '1iimport user_drbg, secrets\nsecrets.randbelow = user_drbg.randbelow\n' "$pyf"
 done
 
