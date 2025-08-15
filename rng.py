@@ -35,7 +35,7 @@ CONTINUE_MAP = {
     "1PWo3JeB9jr": 50,
     "1PWo3JeB9j":   5,
     "1PWo3JeB9":    3,  # en sık çıkan olarak güncellendi
-    "1PWo3JeB":      1,
+    "1PWo3JeB":     1,
 }
 DEFAULT_CONTINUE = 1
 
@@ -44,12 +44,34 @@ SKIP_CYCLES    = 25
 SKIP_BITS_MIN  = 55
 SKIP_BITS_MAX  = 64
 
+
+# ==============================================================================
+# ====== GÜNCELLENMİŞ VE İYİLEŞTİRİLMİŞ RANDOM FONKSİYONU ======
+# ==============================================================================
 def random_start():
-    low_blk  = KEY_MIN >> RANGE_BITS
-    high_blk = KEY_MAX >> RANGE_BITS
-    count    = high_blk - low_blk + 1
-    blk_idx  = secrets.randbelow(count) + low_blk
-    start    = blk_idx << RANGE_BITS
+    """
+    KEY_MIN ve KEY_MAX arasında, istatistiksel olarak tamamen tekdüze (uniform) dağılıma sahip
+    rastgele bir başlangıç noktası üretir. Bu yöntem, aralıktaki her bir olası anahtara
+    eşit seçilme şansı verir ve herhangi bir desene yönelik yanlılık (bias) oluşturmaz.
+    '4BBB' ve '49C1' gibi başlangıçların olasılığı tamamen eşittir.
+    """
+    # 1. Tüm anahtar uzayının toplam büyüklüğünü kullan.
+    random_offset = secrets.randbelow(KEYSPACE_LEN)
+
+    # 2. Bu rastgele ofseti, başlangıç anahtarına (KEY_MIN) ekleyerek
+    #    tüm aralık içinde tamamen rastgele bir nokta belirle.
+    random_key = KEY_MIN + random_offset
+
+    # 3. vanitysearch'ün çalışması için bu tamamen rastgele anahtarı, ait olduğu
+    #    bloğun başlangıç adresine hizala. Bu işlem, anahtarın son 40 bitini sıfırlar.
+    block_mask = ~((1 << RANGE_BITS) - 1)
+    start = random_key & block_mask
+
+    # 4. Hizalama işlemi sonucu anahtarın KEY_MIN'in altına düşme ihtimaline karşı
+    #    (çok düşük bir ihtimal de olsa) bir kontrol ekle.
+    if start < KEY_MIN:
+        start = KEY_MIN
+        
     print(f">>> random_start → start=0x{start:x}")
     return start
 
@@ -79,13 +101,13 @@ def scan_at(start: int, gpu_id: int):
 
         if line.startswith("Public Addr:"):
             hit, addr = True, line.split()[-1].strip()
-            print(f"   !! public-hit: {addr}")
+            print(f"    !! public-hit: {addr}")
 
         if "Priv (HEX):" in line and hit:
             m = re.search(r"0x\s*([0-9A-Fa-f]+)", line)
             if m:
                 priv = m.group(1).zfill(64)
-                print(f"   >> privkey: {priv}")
+                print(f"    >> privkey: {priv}")
 
     p.wait()
     return hit, addr, priv
@@ -115,17 +137,17 @@ def worker(gpu_id: int):
                     new_win = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
                     if new_win > initial_window:
                         initial_window = new_win
-                        print(f"   >> [GPU {gpu_id}] nadir hit! window={initial_window}")
+                        print(f"    >> [GPU {gpu_id}] nadir hit! window={initial_window}")
 
                 window_rem -= 1
-                print(f"   >> [GPU {gpu_id}] [MAIN WINDOW] "
+                print(f"    >> [GPU {gpu_id}] [MAIN WINDOW] "
                       f"{initial_window-window_rem}/{initial_window}")
 
                 if window_rem > 0:
                     start = wrap_inc(start, BLOCK_SIZE)
                 else:
                     skip_rem = SKIP_CYCLES
-                    print(f"   >> [GPU {gpu_id}] MAIN WINDOW bitti → skip-window={SKIP_CYCLES}\n")
+                    print(f"    >> [GPU {gpu_id}] MAIN WINDOW bitti → skip-window={SKIP_CYCLES}\n")
                 continue
 
             # ====== SKIP WINDOW ======
@@ -136,7 +158,7 @@ def worker(gpu_id: int):
                 start       = skip_start
                 last_main_start = skip_start
 
-                print(f"   >> [GPU {gpu_id}] [SKIP WINDOW] "
+                print(f"    >> [GPU {gpu_id}] [SKIP WINDOW] "
                       f"{SKIP_CYCLES-skip_rem+1}/{SKIP_CYCLES}: "
                       f"{bit_skip}-bit skip → 0x{start:x}")
 
@@ -152,12 +174,12 @@ def worker(gpu_id: int):
                     window_rem = initial_window
                     skip_rem   = SKIP_CYCLES
                     start      = wrap_inc(start, BLOCK_SIZE)
-                    print(f"   >> [GPU {gpu_id}] SKIP-HIT! matched={matched}, window={initial_window}\n")
+                    print(f"    >> [GPU {gpu_id}] SKIP-HIT! matched={matched}, window={initial_window}\n")
                 else:
                     skip_rem -= 1
                     if skip_rem == 0:
                         start = random_start()
-                        print(f"   >> [GPU {gpu_id}] SKIP WINDOW no-hit→ random_start\n")
+                        print(f"    >> [GPU {gpu_id}] SKIP WINDOW no-hit→ random_start\n")
                 continue
 
             # ====== DEFAULT CONTINUE ======
@@ -165,11 +187,11 @@ def worker(gpu_id: int):
                 hit, addr, priv = scan_at(start, gpu_id)
                 scan_ct += 1
                 if hit and priv:
-                    matched        = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
+                    matched      = next((p for p in sorted_pfx if addr.startswith(p)), PREFIX)
                     initial_window = CONTINUE_MAP.get(matched, DEFAULT_CONTINUE)
                     window_rem     = initial_window
                     start          = wrap_inc(start, BLOCK_SIZE)
-                    print(f"   >> [GPU {gpu_id}] SEQ-HIT! matched={matched}, window={initial_window}\n")
+                    print(f"    >> [GPU {gpu_id}] SEQ-HIT! matched={matched}, window={initial_window}\n")
                     break
                 else:
                     start = wrap_inc(start, BLOCK_SIZE)
