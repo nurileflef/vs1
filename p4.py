@@ -10,7 +10,7 @@ import pty
 # ====== AYARLAR ======
 KEY_MIN    = int("400000000000000000", 16)
 KEY_MAX    = int("7FFFFFFFFFFFFFFFFF", 16)
-RANGE_BITS = 39
+RANGE_BITS = 40
 BLOCK_SIZE = 1 << RANGE_BITS
 KEYSPACE   = KEY_MAX - KEY_MIN + 1
 N_BLOCKS   = KEYSPACE // BLOCK_SIZE
@@ -144,3 +144,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
