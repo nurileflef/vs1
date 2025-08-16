@@ -11,7 +11,7 @@ RANGE_HEX = 1 << 38  # 2^37
 LOOP_DELAY = 0.5  # saniye
 
 # Ortalama step büyüklüğü → random üretim bu değere göre olacak
-STEP_SIZE_HEX = "117576E8EF7B512C"  # örn: ~4.5 TB
+STEP_SIZE_HEX = "1175716E8EF7B512C"  # örn: ~4.5 TB
 OUTPUT_FILE = "ALL1.txt"  # <<< TEK DOSYA >>>
 
 # GPU Aralıkları (start, end)
@@ -68,7 +68,7 @@ def gpu_worker(gpu_id, start_hex, end_hex):
                 "-gpuId", str(gpu_id),
                 "-o", OUTPUT_FILE,
                 "-start", start_hex_str,
-                "-range", "36",
+                "-range", "38",
                 TARGET_PATTERN
             ]
 
