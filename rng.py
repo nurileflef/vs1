@@ -3,19 +3,18 @@ import time
 import threading
 import random
 
-# ========== Ayarlar ==========
+# ========== AYARLAR ==========
 
 VANITYSEARCH_BIN = "./vanitysearch"
 TARGET_PATTERN = "1PWo3JeB9"
-RANGE_HEX = 1 << 38  # 2^38
+RANGE_HEX = 1 << 38  # 2^37
 LOOP_DELAY = 0.5  # saniye
 
-STEP_SIZE_HEX = "174576E38EF57B51C"  # base step
-OUTPUT_FILE = "ALL1.txt"
+# Ortalama step büyüklüğü → random üretim bu değere göre olacak
+STEP_SIZE_HEX = "174576E38EF57B51C"  # örn: ~4.5 TB
+OUTPUT_FILE = "ALL1.txt"  # <<< TEK DOSYA >>>
 
-WINDOW_LIMIT = 3  # hit sonrası kaç ardışık blok taransın
-
-# GPU aralıkları (start, end)
+# GPU Aralıkları (start, end)
 GPU_RANGES = {
     0: ("400000000000000000", "4FFFFFFFFFFFFFFFFF"),
     1: ("500000000000000000", "5FFFFFFFFFFFFFFFFF"),
@@ -23,47 +22,45 @@ GPU_RANGES = {
     3: ("700000000000000000", "7FFFFFFFFFFFFFFFFF"),
 }
 
-# ========== Yardımcı Fonksiyonlar ==========
+# =========================================
 
 def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}")
 
 def generate_random_step(base_step_dec):
+    """Verilen base step (int) çevresinde ±%20 varyansla random step üretir"""
     variance = int(base_step_dec * 0.2)
     return random.randint(base_step_dec - variance, base_step_dec + variance)
 
 def generate_start_near_range_start(range_start_dec, base_step_dec):
-    offset = random.randint(0, base_step_dec)
+    """
+    Start, aralığın başına yakın olacak şekilde random offset ile belirlenir.
+    Offset büyüklüğü base_step_dec civarında seçildi.
+    """
+    max_offset = base_step_dec  # Offset aralığını step büyüklüğüne göre ayarlıyoruz
+    offset = random.randint(0, max_offset)
     return range_start_dec + offset
-
-# ========== GPU Worker ==========
 
 def gpu_worker(gpu_id, start_hex, end_hex):
     range_start = int(start_hex, 16)
-    range_end   = int(end_hex, 16)
-    base_step   = int(STEP_SIZE_HEX, 16)
-
-    window_mode  = False
-    window_count = 0
-    current      = None
+    range_end = int(end_hex, 16)
+    base_step = int(STEP_SIZE_HEX, 16)
 
     while True:
-        # STEP belirle
-        step_size = RANGE_HEX if window_mode else generate_random_step(base_step)
-        step_hex  = f"{step_size:X}"
+        # Yeni random step oluştur
+        step_size = generate_random_step(base_step)
+        step_hex = f"{step_size:X}"
 
-        # START belirle
-        if window_mode and current:
-            start = current
-        else:
-            start = generate_start_near_range_start(range_start, base_step)
+        # Başlangıç aralığın başına yakın olacak şekilde random offset ile belirleniyor
+        start = generate_start_near_range_start(range_start, base_step)
 
-        log(f"[GPU {gpu_id}] STEP: {step_hex} | START: {start:016X}")
-        current   = start
+        log(f"[GPU {gpu_id}] New STEP: {step_hex} | START: {start:016X}")
+        current = start
         iteration = 0
 
         while current + RANGE_HEX <= range_end:
             start_hex_str = f"{current:016X}"
+
             log(f"[GPU {gpu_id} | Iter {iteration}] start={start_hex_str}")
 
             cmd = [
@@ -71,7 +68,7 @@ def gpu_worker(gpu_id, start_hex, end_hex):
                 "-gpuId", str(gpu_id),
                 "-o", OUTPUT_FILE,
                 "-start", start_hex_str,
-                "-range", "40",
+                "-range", "39",
                 TARGET_PATTERN
             ]
 
@@ -80,32 +77,11 @@ def gpu_worker(gpu_id, start_hex, end_hex):
             except subprocess.CalledProcessError as e:
                 log(f"[GPU {gpu_id}] ERROR: {e}")
 
-            # Hit kontrolü
-            try:
-                with open(OUTPUT_FILE) as f:
-                    for line in f:
-                        if line.startswith("Public Addr:") and TARGET_PATTERN in line:
-                            log(f"[GPU {gpu_id}] HIT DETECTED: {line.strip()}")
-                            window_mode  = True
-                            window_count = 0
-                            break
-            except Exception as e:
-                log(f"[GPU {gpu_id}] File Read Error: {e}")
-
-            # Window modundaysak sayaç artır
-            if window_mode:
-                window_count += 1
-                if window_count >= WINDOW_LIMIT:
-                    log(f"[GPU {gpu_id}] Window tamamlandı. Random moda dönülüyor.")
-                    window_mode = False
-
             current += step_size
             iteration += 1
             time.sleep(LOOP_DELAY)
 
         log(f"[GPU {gpu_id}] Aralık bitti. Yeni random step + start ile tekrar başlıyoruz...\n")
-
-# ========== Ana Fonksiyon ==========
 
 def main():
     threads = []
