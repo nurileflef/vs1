@@ -68,7 +68,7 @@ def gpu_worker(gpu_id, start_hex, end_hex):
                 "-gpuId", str(gpu_id),
                 "-o", OUTPUT_FILE,
                 "-start", start_hex_str,
-                "-range", "37",
+                "-range", "36",
                 TARGET_PATTERN
             ]
 
