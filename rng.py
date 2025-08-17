@@ -12,9 +12,9 @@ RANGE_BITS       = 38
 BLOCK_SIZE       = 1 << RANGE_BITS      # 2^38
 LOOP_DELAY       = 0.5                  # saniye
 
-# Ortalama step büyüklüğü → random üretim bu değere göre olacak
-STEP_SIZE_HEX    = "11757126E8EF7B512"  # ~ortalama adım
-BASE_STEP        = int(STEP_SIZE_HEX, 16)
+# Step size aralığı (hex)
+STEP_MIN = int("100000000000000", 16)
+STEP_MAX = int("10000000000000000", 16)
 
 OUTPUT_FILE      = "ALL1.txt"            # <<< TEK DOSYA >>>
 
@@ -33,18 +33,17 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-def generate_random_step(base_step_dec):
-    """BASE_STEP etrafında ±%20 varyansla random step üretir."""
-    var = int(base_step_dec * 0.2)
-    return random.randint(base_step_dec - var, base_step_dec + var)
+def generate_random_step():
+    """STEP_MIN ile STEP_MAX arasında random step üretir."""
+    return random.randint(STEP_MIN, STEP_MAX)
 
 
-def generate_start_near_range_start(range_start_dec, base_step_dec):
+def generate_start_near_range_start(range_start_dec):
     """
     Start, aralığın başına yakın olacak şekilde random offset ile belirlenir.
-    Offset büyüklüğü base_step_dec civarında seçilir.
+    Offset büyüklüğü STEP_MAX civarında seçilir.
     """
-    offset = random.randint(0, base_step_dec)
+    offset = random.randint(0, STEP_MAX)
     return range_start_dec + offset
 
 
@@ -56,8 +55,8 @@ def gpu_worker(gpu_id, start_hex, end_hex):
 
     while True:
         # 1) Adım büyüklüğünü ve raw start'ı üret
-        step_size = generate_random_step(BASE_STEP)
-        raw_start = generate_start_near_range_start(range_start, BASE_STEP)
+        step_size = generate_random_step()
+        raw_start = generate_start_near_range_start(range_start)
 
         # 2) Başlangıcı BLOCK_SIZE ile hizala, ama current'ta raw kullan
         aligned_start = (raw_start // BLOCK_SIZE) * BLOCK_SIZE
