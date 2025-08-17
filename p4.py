@@ -9,7 +9,7 @@ import threading
 # ====== KULLANICI AYARLARI ======
 KEY_MIN        = int("400000000000000000", 16)
 KEY_MAX        = int("7FFFFFFFFFFFFFFFFF", 16)
-RANGE_BITS     = 38
+RANGE_BITS     = 39
 BLOCK_SIZE     = 1 << RANGE_BITS
 KEYSPACE_LEN   = KEY_MAX - KEY_MIN + 1
 MAX_OFFSET     = KEYSPACE_LEN - BLOCK_SIZE
@@ -19,17 +19,17 @@ ALL_FILE       = "ALL1.txt"
 PREFIX         = "1PWo3JeB9"
 
 CONTINUE_MAP = {
-    "1PWo3JeB9jr": 100,
-    "1PWo3JeB9j":   71,
+    "1PWo3JeB9jr": 75,
+    "1PWo3JeB9j":   15,
     "1PWo3JeB9":     3,
     "1PWo3JeB":      1,
 }
 DEFAULT_CONTINUE = 1
 
 # ====== SKIP WINDOW PARAMETRELERİ ======
-SKIP_CYCLES    = 35
+SKIP_CYCLES    = 15
 SKIP_BITS_MIN  = 55
-SKIP_BITS_MAX  = 64
+SKIP_BITS_MAX  = 61
 
 # ====== GPU ADEDİ ======
 TOTAL_GPUS = 4
@@ -187,3 +187,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
