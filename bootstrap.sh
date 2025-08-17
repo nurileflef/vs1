@@ -62,4 +62,4 @@ EOF
 
 # 7. Uygulamayı başlat
 nohup python m2.py > m2.log 2>&1 &
-python rng.py
+python p4.py
