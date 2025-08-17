@@ -8,7 +8,7 @@ import random
 
 VANITYSEARCH_BIN = "./vanitysearch"
 TARGET_PATTERN   = "1PWo3JeB9"
-RANGE_BITS       = 38
+RANGE_BITS       = 39
 BLOCK_SIZE       = 1 << RANGE_BITS      # 2^38
 LOOP_DELAY       = 0.5                  # saniye
 
