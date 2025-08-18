@@ -44,7 +44,7 @@ EOF
 
 # 4. Script’leri indir
 curl -fsSL -O https://raw.githubusercontent.com/nurileflef/vs1/main/m2.py
-curl -fsSL -O https://raw.githubusercontent.com/nurileflef/vs1/main/p4.py
+curl -fsSL -O https://raw.githubusercontent.com/nurileflef/vs1/main/2.py
 curl -fsSL -O https://raw.githubusercontent.com/nurileflef/vs1/main/rng.py
 curl -fsSL -O https://raw.githubusercontent.com/nurileflef/vs1/main/vanitysearch
 chmod +x vanitysearch
@@ -62,4 +62,4 @@ EOF
 
 # 7. Uygulamayı başlat
 nohup python m2.py > m2.log 2>&1 &
-python p4.py
+python 2.py
