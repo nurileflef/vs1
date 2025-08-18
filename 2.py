@@ -11,7 +11,7 @@ start_max = int("7FFFFFFFFFFFFFFFFF", 16)
 gpu_ids = [0, 1, 2, 3]
 
 # Komut şablonu
-base_command = "./vanitysearch -gpuId {gpu} -o ALL{gpu}.txt -start {start} -range 65 -random 1PWo3JeB9"
+base_command = "./vanitysearch -gpuId {gpu} -o ALL1.txt -start {start} -range 68 -random 1PWo3JeB9"
 
 # Alt işlemleri burada tutacağız
 processes = []
