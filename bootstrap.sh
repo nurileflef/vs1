@@ -3,7 +3,7 @@ set -e
 
 # 1. CUDA yükle (sudo yok, doğrudan root yetkisiyle çalışıyor)
 yes | apt-get update
-yes | apt-get install nvidia-cuda-toolkit
+yes | apt-get install nvidia-cuda-toolkit || echo "CUDA kurulumu hata verdi ama devam ediliyor..."
 
 # 2. Python bağımlılıklarını yükle
 pip install watchdog python-dotenv
