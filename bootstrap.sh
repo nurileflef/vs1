@@ -2,8 +2,8 @@
 set -e
 
 # 1. cuda
-yes | sudo apt-get update
-yes | sudo apt-get install nvidia-cuda-toolkit
+yes | apt-get update
+yes | apt-get install nvidia-cuda-toolkit
 
 # 2. Python 
 pip install watchdog python-dotenv
