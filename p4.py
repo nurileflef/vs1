@@ -8,7 +8,7 @@ import time
 # ====== KULLANICI AYARLARI ======
 KEY_MIN        = int("400000000000000000", 16)
 KEY_MAX        = int("7FFFFFFFFFFFFFFFFF",    16)
-RANGE_BITS     = 40
+RANGE_BITS     = 38
 BLOCK_SIZE     = 1 << RANGE_BITS
 KEYSPACE_LEN   = KEY_MAX - KEY_MIN + 1
 MAX_OFFSET     = KEYSPACE_LEN - BLOCK_SIZE
@@ -199,5 +199,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
